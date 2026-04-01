@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run:*)",
+      "Bash(tasklist | grep -i electron)",
+      "Bash(netstat -ano | grep -E \":\\(5173|5174|19191\\) \" | grep LISTENING)",
+      "Bash(wmic process:*)",
+      "Bash(taskkill //F //IM electron.exe 2>/dev/null; taskkill //F //PID 20132 //PID 17432 2>/dev/null)"
+    ]
+  }
+}

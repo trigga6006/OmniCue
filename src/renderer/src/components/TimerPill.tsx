@@ -184,7 +184,7 @@ export function TimerPill() {
     (e: React.PointerEvent) => {
       if (!dragStartRef.current) return
       // Cap drag so pill stays within the visible window
-      const maxStretch = Math.max(0, window.innerWidth / 2 - REST_W - 60)
+      const maxStretch = Math.max(0, window.innerWidth / 2 - restW - 60)
       const dx = Math.max(0, Math.min(e.clientX - dragStartRef.current.x, maxStretch))
       setDragOffset(dx)
       setValue(valueFromDrag(mode, dragStartRef.current.baseValue, dx))
@@ -244,7 +244,8 @@ export function TimerPill() {
     if (e.key === 'Escape') setCreating(false)
   }
 
-  const currentW = phase === 'label' || phase === 'editTime' ? LABEL_W : REST_W + dragOffset
+  const restW = mode === 'alarm' ? 142 : REST_W
+  const currentW = phase === 'label' || phase === 'editTime' ? LABEL_W : restW + dragOffset
 
   // Concave pinch: top/bottom edges curve inward during stretch
   // Starts just past the time badge (~75px) so it doesn't squish the icon/badge
@@ -361,8 +362,8 @@ export function TimerPill() {
           )}
         </AnimatePresence>
 
-        {/* Spacer */}
-        <div className="flex-1" />
+        {/* Spacer — small fixed gap in drag phase, flexible in label phase */}
+        <div className={phase === 'drag' ? 'w-1.5' : 'flex-1'} />
 
         {/* Right: grip or label input */}
         <AnimatePresence mode="wait">
@@ -373,16 +374,16 @@ export function TimerPill() {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.12 }}
-              className="shrink-0 w-6 h-full flex flex-col items-center justify-center gap-[3px]
+              className="shrink-0 w-6 h-full flex flex-row items-center justify-center gap-[2px]
                 cursor-ew-resize select-none touch-none z-10"
               onPointerDown={handleGripPointerDown}
               onPointerMove={handleGripPointerMove}
               onPointerUp={handleGripPointerUp}
               onPointerCancel={handleGripPointerUp}
             >
-              <div className="w-2.5 h-[1.5px] rounded-full bg-[var(--g-text-muted)]" />
-              <div className="w-2.5 h-[1.5px] rounded-full bg-[var(--g-text-muted)]" />
-              <div className="w-2.5 h-[1.5px] rounded-full bg-[var(--g-text-muted)]" />
+              <div className="w-[1px] h-[10px] rounded-full bg-[var(--g-text-muted)]" />
+              <div className="w-[1px] h-[10px] rounded-full bg-[var(--g-text-muted)]" />
+              <div className="w-[1px] h-[10px] rounded-full bg-[var(--g-text-muted)]" />
             </motion.div>
           ) : (
             <motion.div

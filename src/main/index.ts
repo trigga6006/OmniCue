@@ -174,6 +174,11 @@ function startCursorPolling(win: BrowserWindow): void {
   const POLL_MS = 32 // ~30 fps
   const PAD = 10 // px padding around window
   const COOLDOWN_MS = 200 // minimum time between ignore→capture transitions
+  // Only check the narrow bar region, not the full window height.
+  // The bar sits at BAR_TOP=10 and elements are ~36px tall.
+  // Below this is transparent space for panels/notifications that the
+  // renderer reaches via data-interactive once capture is already active.
+  const BAR_ZONE_HEIGHT = 72
 
   setInterval(() => {
     if (win.isDestroyed() || !win.isVisible()) return
@@ -192,7 +197,7 @@ function startCursorPolling(win: BrowserWindow): void {
       cursor.x >= b.x - PAD &&
       cursor.x <= b.x + b.width + PAD &&
       cursor.y >= b.y - PAD &&
-      cursor.y <= b.y + b.height + PAD
+      cursor.y <= b.y + BAR_ZONE_HEIGHT + PAD
     ) {
       overlayState.isIgnoring = false
       win.setIgnoreMouseEvents(false)
