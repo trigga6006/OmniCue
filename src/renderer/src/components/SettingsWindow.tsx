@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import {
   Clock, Settings, Trash2, X, CheckCircle2, AlertCircle,
-  Bell, Repeat, Timer, Plus, Pencil
+  Bell, Repeat, Timer, Plus, Pencil, Sparkles
 } from 'lucide-react'
 import claudeLogo from '@/assets/claude-logo.svg'
 import codexLogo from '@/assets/codex-logo.svg'
@@ -12,12 +12,12 @@ import { parseDuration } from '@/lib/parseDuration'
 import { formatTime, timeAgo, generateId } from '@/lib/utils'
 import type { EntryType, Alarm, Reminder, HistoryEntry } from '@/lib/types'
 
-type Tab = 'history' | 'settings' | 'alarms' | 'reminders'
+type Tab = 'history' | 'settings' | 'alarms' | 'reminders' | 'ai'
 
 function getInitialTab(): Tab {
   const params = new URLSearchParams(window.location.hash.split('?')[1] || '')
   const t = params.get('tab') as Tab
-  return ['history', 'settings', 'alarms', 'reminders'].includes(t) ? t : 'settings'
+  return ['history', 'settings', 'alarms', 'reminders', 'ai'].includes(t) ? t : 'settings'
 }
 
 export function SettingsWindow() {
@@ -30,7 +30,7 @@ export function SettingsWindow() {
     loadHistory()
 
     const unsubTab = window.electronAPI.onSwitchTab((t) => {
-      if (['history', 'settings', 'alarms', 'reminders'].includes(t)) setTab(t as Tab)
+      if (['history', 'settings', 'alarms', 'reminders', 'ai'].includes(t)) setTab(t as Tab)
     })
     const unsubHistory = window.electronAPI.onNewHistoryEntry((entry: unknown) => {
       addLocal(entry as HistoryEntry)
@@ -79,6 +79,10 @@ export function SettingsWindow() {
           <Clock size={13} />
           History
         </TabButton>
+        <TabButton active={tab === 'ai'} onClick={() => setTab('ai')}>
+          <Sparkles size={13} />
+          AI
+        </TabButton>
       </div>
 
       {/* Content */}
@@ -87,6 +91,7 @@ export function SettingsWindow() {
         {tab === 'alarms' && <AlarmsTab />}
         {tab === 'reminders' && <RemindersTab />}
         {tab === 'history' && <HistoryTab entries={entries} clearHistory={clearHistory} />}
+        {tab === 'ai' && <AiTab settings={settings} update={update} />}
       </div>
     </div>
   )
@@ -763,6 +768,54 @@ function HistoryTab({
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+function AiTab({
+  settings,
+  update,
+}: {
+  settings: ReturnType<typeof useSettingsStore.getState>['settings']
+  update: ReturnType<typeof useSettingsStore.getState>['update']
+}) {
+  return (
+    <div className="p-6 space-y-6">
+      <Section title="AI Provider">
+        <Row label="API Key">
+          <input
+            type="password"
+            value={settings.aiApiKey}
+            onChange={(e) => update({ aiApiKey: e.target.value })}
+            placeholder="sk-..."
+            className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+              text-[13px] text-white/80 border border-white/[0.08] outline-none
+              focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+          />
+        </Row>
+        <Row label="Model">
+          <input
+            type="text"
+            value={settings.aiModel}
+            onChange={(e) => update({ aiModel: e.target.value })}
+            placeholder="gpt-4o"
+            className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+              text-[13px] text-white/80 border border-white/[0.08] outline-none
+              focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+          />
+        </Row>
+        <Row label="Base URL">
+          <input
+            type="text"
+            value={settings.aiBaseUrl}
+            onChange={(e) => update({ aiBaseUrl: e.target.value })}
+            placeholder="Leave empty for default"
+            className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+              text-[13px] text-white/80 border border-white/[0.08] outline-none
+              focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+          />
+        </Row>
+      </Section>
     </div>
   )
 }

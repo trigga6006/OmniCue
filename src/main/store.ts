@@ -36,6 +36,9 @@ interface SettingsData {
   fullScreenAlarms: boolean
   fullScreenReminders: boolean
   fullScreenClaude: boolean
+  aiApiKey: string
+  aiBaseUrl: string
+  aiModel: string
 }
 
 const SETTINGS_DEFAULTS: SettingsData = {
@@ -47,6 +50,9 @@ const SETTINGS_DEFAULTS: SettingsData = {
   fullScreenAlarms: false,
   fullScreenReminders: false,
   fullScreenClaude: false,
+  aiApiKey: '',
+  aiBaseUrl: '',
+  aiModel: 'gpt-4o',
 }
 
 export const settingsStore = {

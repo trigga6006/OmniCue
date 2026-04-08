@@ -17,6 +17,10 @@ import { generateId } from '@/lib/utils'
 import { useGlobalClickThrough } from '@/hooks/useClickThrough'
 import { useBrightnessSampler } from '@/hooks/useBrightnessSampler'
 import { FullScreenAlert } from '@/components/FullScreenAlert'
+import { AiButton } from '@/components/AiButton'
+import { CompanionPanel } from '@/components/CompanionPanel'
+import { useCompanionStore } from '@/stores/companionStore'
+import { COMPANION_HEIGHT } from '@/lib/constants'
 import type { AppNotification, ActiveTimer } from '@/lib/types'
 
 // Bar top offset inside the window (px from top edge)
@@ -43,6 +47,7 @@ export default function App() {
   const addHistoryLocal = useHistoryStore((s) => s.addLocal)
 
   const settings = useSettingsStore((s) => s.settings)
+  const companionVisible = useCompanionStore((s) => s.visible)
 
   const [contextMenu, setContextMenu] = useState({ x: 0, y: 0, visible: false })
   const [showHistory, setShowHistory] = useState(false)
@@ -123,6 +128,22 @@ export default function App() {
       addHistoryLocal(entry as HistoryEntry)
     })
 
+    // Listen for global hotkey toggle
+    const unsubCompanion = window.electronAPI.onToggleCompanion(() => {
+      const companion = useCompanionStore.getState()
+      if (!companion.visible) {
+        setShowHistory(false)
+        setShowSettings(false)
+        window.electronAPI.captureActiveWindow().then((result) => {
+          if (result) useCompanionStore.getState().setPendingScreenshot(result)
+        })
+        companion.open()
+      } else {
+        companion.close()
+        window.electronAPI.setInteractiveLock(false)
+      }
+    })
+
     const handler = (e: MouseEvent) => e.preventDefault()
     document.addEventListener('contextmenu', handler)
     return () => {
@@ -130,19 +151,39 @@ export default function App() {
       unsubNotify()
       unsubTimer()
       unsubHistory()
+      unsubCompanion()
     }
   }, [])
 
   // --- Window resize on panel open/close only ---
   // Width is fixed (WIN_WIDTH) to avoid setBounds() during content animations.
   // Only height changes when panels open/close (a discrete user action).
+  // Mutual exclusivity: companion closes other panels, other panels close companion
   useEffect(() => {
-    const height = (showHistory || showSettings) ? PANEL_HEIGHT : BASE_HEIGHT
+    if (companionVisible) {
+      setShowHistory(false)
+      setShowSettings(false)
+      window.electronAPI.setInteractiveLock(true)
+    } else {
+      window.electronAPI.setInteractiveLock(false)
+    }
+  }, [companionVisible])
+
+  useEffect(() => {
+    if (showHistory || showSettings) {
+      useCompanionStore.getState().close()
+    }
+  }, [showHistory, showSettings])
+
+  useEffect(() => {
+    const height = companionVisible
+      ? COMPANION_HEIGHT
+      : (showHistory || showSettings) ? PANEL_HEIGHT : BASE_HEIGHT
     if (height !== lastHeight.current) {
       lastHeight.current = height
       window.electronAPI.requestWindowResize(WIN_WIDTH, height)
     }
-  }, [showHistory, showSettings])
+  }, [showHistory, showSettings, companionVisible])
 
   // --- Drag: move the BrowserWindow itself ---
   const handleGripMouseDown = useCallback((e: React.MouseEvent) => {
@@ -282,6 +323,10 @@ export default function App() {
             </AnimatedSlot>
           ))}
         </AnimatePresence>
+
+        <div className="pointer-events-auto ml-2" data-interactive>
+          <AiButton />
+        </div>
       </div>
 
       {/* Context menu */}
@@ -318,6 +363,12 @@ export default function App() {
       <SettingsPanel
         visible={showSettings}
         onClose={() => setShowSettings(false)}
+        anchorX={Math.round(window.innerWidth / 2)}
+        anchorY={BAR_TOP}
+      />
+      <CompanionPanel
+        visible={companionVisible}
+        onClose={() => useCompanionStore.getState().close()}
         anchorX={Math.round(window.innerWidth / 2)}
         anchorY={BAR_TOP}
       />

@@ -1,3 +1,14 @@
+export type ChatRole = 'user' | 'assistant'
+
+export interface ChatMessage {
+  id: string
+  role: ChatRole
+  content: string
+  screenshot?: string
+  screenshotTitle?: string
+  createdAt: number
+}
+
 export interface ActiveTimer {
   id: string
   name: string
@@ -27,6 +38,9 @@ export interface Settings {
   fullScreenAlarms: boolean
   fullScreenReminders: boolean
   fullScreenClaude: boolean
+  aiApiKey: string
+  aiBaseUrl: string
+  aiModel: string
 }
 
 export interface AppNotification {
@@ -89,6 +103,13 @@ export interface ElectronAPI {
   getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   getPrimaryDisplayBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   sendTestAlert: () => void
+  captureActiveWindow: () => Promise<{ image: string; title: string } | null>
+  sendAiMessage: (payload: { messages: unknown[]; sessionId: string }) => Promise<{ ok: boolean }>
+  abortAiStream: (sessionId: string) => void
+  onAiStreamToken: (cb: (data: { sessionId: string; token: string }) => void) => () => void
+  onAiStreamDone: (cb: (data: { sessionId: string; fullText: string }) => void) => () => void
+  onAiStreamError: (cb: (data: { sessionId: string; error: string }) => void) => () => void
+  onToggleCompanion: (cb: () => void) => () => void
 }
 
 declare global {

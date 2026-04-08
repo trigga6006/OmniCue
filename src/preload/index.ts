@@ -80,6 +80,44 @@ const electronAPI = {
     ipcRenderer.invoke('get-primary-display-bounds'),
   sendTestAlert: (): void => {
     ipcRenderer.send('send-test-alert')
+  },
+  captureActiveWindow: (): Promise<{ image: string; title: string } | null> =>
+    ipcRenderer.invoke('capture-active-window'),
+  sendAiMessage: (payload: {
+    messages: unknown[]
+    sessionId: string
+  }): Promise<{ ok: boolean }> => ipcRenderer.invoke('ai:send-message', payload),
+  abortAiStream: (sessionId: string): void => {
+    ipcRenderer.send('ai:abort', { sessionId })
+  },
+  onAiStreamToken: (
+    callback: (data: { sessionId: string; token: string }) => void
+  ): (() => void) => {
+    const handler = (_event: unknown, data: { sessionId: string; token: string }): void =>
+      callback(data)
+    ipcRenderer.on('ai:stream-token', handler)
+    return () => ipcRenderer.removeListener('ai:stream-token', handler)
+  },
+  onAiStreamDone: (
+    callback: (data: { sessionId: string; fullText: string }) => void
+  ): (() => void) => {
+    const handler = (_event: unknown, data: { sessionId: string; fullText: string }): void =>
+      callback(data)
+    ipcRenderer.on('ai:stream-done', handler)
+    return () => ipcRenderer.removeListener('ai:stream-done', handler)
+  },
+  onAiStreamError: (
+    callback: (data: { sessionId: string; error: string }) => void
+  ): (() => void) => {
+    const handler = (_event: unknown, data: { sessionId: string; error: string }): void =>
+      callback(data)
+    ipcRenderer.on('ai:stream-error', handler)
+    return () => ipcRenderer.removeListener('ai:stream-error', handler)
+  },
+  onToggleCompanion: (callback: () => void): (() => void) => {
+    const handler = (): void => callback()
+    ipcRenderer.on('toggle-companion', handler)
+    return () => ipcRenderer.removeListener('toggle-companion', handler)
   }
 }
 

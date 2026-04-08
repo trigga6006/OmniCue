@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain } from 'electron'
+import { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, globalShortcut } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
@@ -229,6 +229,17 @@ app.whenReady().then(() => {
 
   createWindow()
 
+  // Register global hotkey for AI companion
+  globalShortcut.register('Ctrl+Shift+Space', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('toggle-companion')
+      if (!mainWindow.isVisible()) mainWindow.show()
+      mainWindow.setIgnoreMouseEvents(false)
+      overlayState.isIgnoring = false
+      overlayState.locked = true
+    }
+  })
+
   // Start HTTP API server for CLI / Claude Code integration
   if (mainWindow) {
     startServer(mainWindow)
@@ -241,6 +252,10 @@ app.whenReady().then(() => {
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
 })
 
 app.on('window-all-closed', () => {

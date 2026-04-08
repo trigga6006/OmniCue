@@ -16,3 +16,4 @@ export const DEFAULT_SETTINGS = {
 
 export const TIMER_CIRCLE_SIZE = 48
 export const PLUS_BUTTON_SIZE = 36
+export const COMPANION_HEIGHT = 600

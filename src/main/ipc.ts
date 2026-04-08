@@ -4,6 +4,10 @@ import * as os from 'os'
 import * as path from 'path'
 import { settingsStore, historyStore, alarmsStore, remindersStore } from './store'
 import { overlayState } from './overlayState'
+import { streamAiResponse } from './ai'
+import type { CoreMessage } from 'ai'
+
+const activeStreams = new Map<string, AbortController>()
 
 const MARKER_START = '<!-- OmniCue:start -->'
 const MARKER_END = '<!-- OmniCue:end -->'
@@ -283,6 +287,90 @@ export function registerIpcHandlers(): void {
       return { ok: true }
     } catch (e) {
       return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  // ─── AI Companion ────────────────────────────────────────────────────────────
+
+  ipcMain.handle('capture-active-window', async (): Promise<{ image: string; title: string } | null> => {
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['window'],
+        thumbnailSize: { width: 1280, height: 720 },
+        fetchWindowIcons: false,
+      })
+
+      const ownIds = new Set(BrowserWindow.getAllWindows().map((w) => w.getMediaSourceId()))
+      const active = sources.find((s) => !ownIds.has(s.id))
+      if (!active) return null
+
+      return {
+        image: active.thumbnail.toDataURL(),
+        title: active.name,
+      }
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle(
+    'ai:send-message',
+    async (
+      event,
+      payload: { messages: CoreMessage[]; sessionId: string }
+    ): Promise<{ ok: boolean }> => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (!win) return { ok: false }
+
+      const controller = new AbortController()
+      activeStreams.set(payload.sessionId, controller)
+
+      streamAiResponse(
+        payload.messages,
+        {
+          onToken: (token) => {
+            if (!win.isDestroyed())
+              win.webContents.send('ai:stream-token', {
+                sessionId: payload.sessionId,
+                token,
+              })
+          },
+          onFinish: (fullText) => {
+            activeStreams.delete(payload.sessionId)
+            if (!win.isDestroyed())
+              win.webContents.send('ai:stream-done', {
+                sessionId: payload.sessionId,
+                fullText,
+              })
+          },
+          onError: (error) => {
+            activeStreams.delete(payload.sessionId)
+            if (!win.isDestroyed())
+              win.webContents.send('ai:stream-error', {
+                sessionId: payload.sessionId,
+                error,
+              })
+          },
+        },
+        controller.signal
+      ).catch((err) => {
+        activeStreams.delete(payload.sessionId)
+        if (!win.isDestroyed())
+          win.webContents.send('ai:stream-error', {
+            sessionId: payload.sessionId,
+            error: String(err),
+          })
+      })
+
+      return { ok: true }
+    }
+  )
+
+  ipcMain.on('ai:abort', (_event, payload: { sessionId: string }) => {
+    const controller = activeStreams.get(payload.sessionId)
+    if (controller) {
+      controller.abort()
+      activeStreams.delete(payload.sessionId)
     }
   })
 
