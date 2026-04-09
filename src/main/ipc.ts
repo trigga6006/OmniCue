@@ -1,11 +1,12 @@
-import { ipcMain, BrowserWindow, app, screen, desktopCapturer } from 'electron'
+import { ipcMain, BrowserWindow, app, screen, desktopCapturer, shell } from 'electron'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { settingsStore, historyStore, alarmsStore, remindersStore } from './store'
 import { overlayState } from './overlayState'
-import { streamAiResponse } from './ai'
-import type { CoreMessage } from 'ai'
+import { streamAiResponse, cleanupSession, type ChatMessage } from './ai'
+import { extractTextFromScreenshot, type ScreenType } from './ocr'
+import { getCodexStatus } from './codex-auth'
 
 const activeStreams = new Map<string, AbortController>()
 
@@ -90,6 +91,21 @@ export function registerIpcHandlers(): void {
 
   ipcMain.on('set-interactive-lock', (_event, locked: boolean) => {
     overlayState.locked = locked
+  })
+
+  ipcMain.on('set-panel-open', (_event, open: boolean) => {
+    overlayState.panelOpen = open
+  })
+
+  ipcMain.handle('open-external-url', (_event, url: string): boolean => {
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        shell.openExternal(url)
+        return true
+      }
+    } catch { /* invalid URL */ }
+    return false
   })
 
   // --- Window movement/resize handlers for small-window architecture ---
@@ -290,9 +306,23 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  // ─── Codex Auth ──────────────────────────────────────────────────────────────
+
+  ipcMain.handle('get-codex-status', () => {
+    return getCodexStatus()
+  })
+
   // ─── AI Companion ────────────────────────────────────────────────────────────
 
-  ipcMain.handle('capture-active-window', async (): Promise<{ image: string; title: string } | null> => {
+  // Pending OCR results keyed by a simple counter
+  const pendingOcr = new Map<number, Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>>()
+  let ocrCounter = 0
+
+  ipcMain.handle('capture-active-window', async (): Promise<{
+    image: string
+    title: string
+    ocrId: number
+  } | null> => {
     try {
       const sources = await desktopCapturer.getSources({
         types: ['window'],
@@ -304,20 +334,41 @@ export function registerIpcHandlers(): void {
       const active = sources.find((s) => !ownIds.has(s.id))
       if (!active) return null
 
-      return {
-        image: active.thumbnail.toDataURL(),
-        title: active.name,
-      }
+      const image = active.thumbnail.toDataURL()
+      const title = active.name
+      const ocrId = ++ocrCounter
+
+      // Fire OCR in background — don't block the UI
+      pendingOcr.set(
+        ocrId,
+        extractTextFromScreenshot(image, title)
+          .then((r) => ({ ocrText: r.text, screenType: r.screenType, ocrDurationMs: r.durationMs }))
+          .catch(() => null)
+      )
+
+      return { image, title, ocrId }
     } catch {
       return null
     }
+  })
+
+  ipcMain.handle('get-ocr-result', async (_event, ocrId: number): Promise<{
+    ocrText: string
+    screenType: string
+    ocrDurationMs: number
+  } | null> => {
+    const promise = pendingOcr.get(ocrId)
+    if (!promise) return null
+    const result = await promise
+    pendingOcr.delete(ocrId)
+    return result
   })
 
   ipcMain.handle(
     'ai:send-message',
     async (
       event,
-      payload: { messages: CoreMessage[]; sessionId: string }
+      payload: { messages: unknown[]; sessionId: string; model?: string }
     ): Promise<{ ok: boolean }> => {
       const win = BrowserWindow.fromWebContents(event.sender)
       if (!win) return { ok: false }
@@ -326,7 +377,8 @@ export function registerIpcHandlers(): void {
       activeStreams.set(payload.sessionId, controller)
 
       streamAiResponse(
-        payload.messages,
+        payload.sessionId,
+        payload.messages as ChatMessage[],
         {
           onToken: (token) => {
             if (!win.isDestroyed())
@@ -352,7 +404,8 @@ export function registerIpcHandlers(): void {
               })
           },
         },
-        controller.signal
+        controller.signal,
+        payload.model
       ).catch((err) => {
         activeStreams.delete(payload.sessionId)
         if (!win.isDestroyed())
@@ -372,6 +425,11 @@ export function registerIpcHandlers(): void {
       controller.abort()
       activeStreams.delete(payload.sessionId)
     }
+  })
+
+  ipcMain.on('ai:cleanup-session', (_event, payload: { sessionId: string }) => {
+    activeStreams.delete(payload.sessionId)
+    cleanupSession(payload.sessionId)
   })
 
   ipcMain.handle('sample-screen-brightness', async (): Promise<number> => {

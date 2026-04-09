@@ -6,18 +6,20 @@ import { useCompanionStore } from '@/stores/companionStore'
 
 export const AiButton = memo(function AiButton() {
   const open = useCompanionStore((s) => s.open)
-  const setPendingScreenshot = useCompanionStore((s) => s.setPendingScreenshot)
+  const setAutoScreenshot = useCompanionStore((s) => s.setAutoScreenshot)
   const visible = useCompanionStore((s) => s.visible)
 
-  const handleClick = async () => {
+  const handleClick = () => {
     if (visible) {
       useCompanionStore.getState().close()
       return
     }
 
-    const result = await window.electronAPI.captureActiveWindow()
-    if (result) setPendingScreenshot(result)
+    // Open panel immediately — capture + OCR happen in background (invisible to user)
     open()
+    window.electronAPI.captureActiveWindow().then((result) => {
+      if (result) setAutoScreenshot(result)
+    })
   }
 
   return (

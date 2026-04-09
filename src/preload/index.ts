@@ -65,6 +65,9 @@ const electronAPI = {
   setInteractiveLock: (locked: boolean): void => {
     ipcRenderer.send('set-interactive-lock', locked)
   },
+  setPanelOpen: (open: boolean): void => {
+    ipcRenderer.send('set-panel-open', open)
+  },
   moveWindowBy: (dx: number, dy: number): void => {
     ipcRenderer.send('move-window-by', { dx, dy })
   },
@@ -81,14 +84,20 @@ const electronAPI = {
   sendTestAlert: (): void => {
     ipcRenderer.send('send-test-alert')
   },
-  captureActiveWindow: (): Promise<{ image: string; title: string } | null> =>
+  captureActiveWindow: (): Promise<{ image: string; title: string; ocrId: number } | null> =>
     ipcRenderer.invoke('capture-active-window'),
+  getOcrResult: (ocrId: number): Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null> =>
+    ipcRenderer.invoke('get-ocr-result', ocrId),
   sendAiMessage: (payload: {
     messages: unknown[]
     sessionId: string
+    model?: string
   }): Promise<{ ok: boolean }> => ipcRenderer.invoke('ai:send-message', payload),
   abortAiStream: (sessionId: string): void => {
     ipcRenderer.send('ai:abort', { sessionId })
+  },
+  cleanupAiSession: (sessionId: string): void => {
+    ipcRenderer.send('ai:cleanup-session', { sessionId })
   },
   onAiStreamToken: (
     callback: (data: { sessionId: string; token: string }) => void
@@ -118,7 +127,11 @@ const electronAPI = {
     const handler = (): void => callback()
     ipcRenderer.on('toggle-companion', handler)
     return () => ipcRenderer.removeListener('toggle-companion', handler)
-  }
+  },
+  getCodexStatus: (): Promise<{ authenticated: boolean; planType?: string; model?: string }> =>
+    ipcRenderer.invoke('get-codex-status'),
+  openExternalUrl: (url: string): Promise<boolean> =>
+    ipcRenderer.invoke('open-external-url', url),
 }
 
 if (process.contextIsolated) {

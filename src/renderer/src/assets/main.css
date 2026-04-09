@@ -18,6 +18,8 @@
   --g-bg-active: rgba(255, 255, 255, 0.14);
   --g-bg-subtle: rgba(255, 255, 255, 0.04);
   --g-bg-pulse: rgba(255, 255, 255, 0.12);
+  --g-bg-strong: rgba(18, 22, 30, 0.84);
+  --g-overlay-strong: rgba(8, 12, 18, 0.56);
 
   /* Borders */
   --g-line: rgba(255, 255, 255, 0.12);
@@ -74,6 +76,8 @@ html[data-bg="light"] {
   --g-bg-active: rgba(0, 0, 0, 0.13);
   --g-bg-subtle: rgba(0, 0, 0, 0.03);
   --g-bg-pulse: rgba(0, 0, 0, 0.08);
+  --g-bg-strong: rgba(248, 248, 250, 0.88);
+  --g-overlay-strong: rgba(245, 246, 248, 0.52);
 
   /* Borders */
   --g-line: rgba(0, 0, 0, 0.13);
@@ -160,3 +164,33 @@ html, body, #root {
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* ── Syntax highlighting — glass theme ────────────────────────────────────── */
+
+.hljs { background: transparent !important; color: var(--g-text-primary); }
+.hljs-keyword, .hljs-selector-tag, .hljs-deletion { color: rgba(180, 160, 255, 0.9); }
+.hljs-string, .hljs-attr, .hljs-addition { color: rgba(160, 220, 170, 0.9); }
+.hljs-number, .hljs-literal { color: rgba(255, 180, 130, 0.9); }
+.hljs-comment, .hljs-quote { color: var(--g-text-muted); font-style: italic; }
+.hljs-built_in, .hljs-type, .hljs-class .hljs-title { color: rgba(130, 200, 255, 0.9); }
+.hljs-function .hljs-title, .hljs-title.function_ { color: rgba(220, 200, 130, 0.9); }
+.hljs-meta, .hljs-meta .hljs-keyword { color: var(--g-text-secondary); }
+.hljs-variable, .hljs-template-variable { color: rgba(220, 170, 170, 0.9); }
+.hljs-regexp { color: rgba(255, 160, 160, 0.9); }
+.hljs-tag { color: rgba(180, 160, 255, 0.7); }
+.hljs-name { color: rgba(130, 200, 255, 0.9); }
+.hljs-attribute { color: rgba(220, 200, 130, 0.9); }
+.hljs-symbol, .hljs-bullet { color: rgba(160, 220, 170, 0.9); }
+
+html[data-bg="light"] .hljs { color: var(--g-text-primary); }
+html[data-bg="light"] .hljs-keyword, html[data-bg="light"] .hljs-selector-tag { color: rgba(100, 60, 200, 0.9); }
+html[data-bg="light"] .hljs-string, html[data-bg="light"] .hljs-attr { color: rgba(40, 140, 80, 0.9); }
+html[data-bg="light"] .hljs-number, html[data-bg="light"] .hljs-literal { color: rgba(200, 100, 40, 0.9); }
+html[data-bg="light"] .hljs-comment { color: var(--g-text-muted); }
+html[data-bg="light"] .hljs-built_in, html[data-bg="light"] .hljs-type { color: rgba(30, 120, 200, 0.9); }
+html[data-bg="light"] .hljs-function .hljs-title { color: rgba(160, 130, 30, 0.9); }
+
+/* ── Markdown content adjustments ─────────────────────────────────────────── */
+
+.markdown-content > :first-child { margin-top: 0; }
+.markdown-content > :last-child { margin-bottom: 0; }

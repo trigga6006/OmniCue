@@ -39,6 +39,7 @@ interface SettingsData {
   aiApiKey: string
   aiBaseUrl: string
   aiModel: string
+  aiMode: 'fast' | 'auto' | 'pro'
 }
 
 const SETTINGS_DEFAULTS: SettingsData = {
@@ -52,7 +53,8 @@ const SETTINGS_DEFAULTS: SettingsData = {
   fullScreenClaude: false,
   aiApiKey: '',
   aiBaseUrl: '',
-  aiModel: 'gpt-4o',
+  aiModel: '',
+  aiMode: 'auto',
 }
 
 export const settingsStore = {

@@ -4,8 +4,14 @@ export interface ChatMessage {
   id: string
   role: ChatRole
   content: string
+  /** Auto-captured screenshot (hidden from UI, always sent as context) */
   screenshot?: string
   screenshotTitle?: string
+  ocrText?: string
+  screenType?: string
+  /** Manual screenshot via photo button (shown in UI) */
+  manualScreenshot?: string
+  manualScreenshotTitle?: string
   createdAt: number
 }
 
@@ -41,6 +47,7 @@ export interface Settings {
   aiApiKey: string
   aiBaseUrl: string
   aiModel: string
+  aiMode: 'fast' | 'auto' | 'pro'
 }
 
 export interface AppNotification {
@@ -97,19 +104,24 @@ export interface ElectronAPI {
   deleteReminder: (id: string) => Promise<void>
   sampleScreenBrightness: () => Promise<number>
   setInteractiveLock: (locked: boolean) => void
+  setPanelOpen: (open: boolean) => void
   moveWindowBy: (dx: number, dy: number) => void
   requestWindowResize: (width: number, height: number) => void
   setWindowBounds: (bounds: { x: number; y: number; width: number; height: number }) => void
   getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   getPrimaryDisplayBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   sendTestAlert: () => void
-  captureActiveWindow: () => Promise<{ image: string; title: string } | null>
-  sendAiMessage: (payload: { messages: unknown[]; sessionId: string }) => Promise<{ ok: boolean }>
+  captureActiveWindow: () => Promise<{ image: string; title: string; ocrId: number } | null>
+  getOcrResult: (ocrId: number) => Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>
+  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; model?: string }) => Promise<{ ok: boolean }>
   abortAiStream: (sessionId: string) => void
+  cleanupAiSession: (sessionId: string) => void
   onAiStreamToken: (cb: (data: { sessionId: string; token: string }) => void) => () => void
   onAiStreamDone: (cb: (data: { sessionId: string; fullText: string }) => void) => () => void
   onAiStreamError: (cb: (data: { sessionId: string; error: string }) => void) => () => void
   onToggleCompanion: (cb: () => void) => () => void
+  getCodexStatus: () => Promise<{ authenticated: boolean; planType?: string; model?: string }>
+  openExternalUrl: (url: string) => Promise<boolean>
 }
 
 declare global {

@@ -779,26 +779,43 @@ function AiTab({
   settings: ReturnType<typeof useSettingsStore.getState>['settings']
   update: ReturnType<typeof useSettingsStore.getState>['update']
 }) {
+  const [codexStatus, setCodexStatus] = useState<{
+    authenticated: boolean
+    planType?: string
+    model?: string
+  } | null>(null)
+
+  useEffect(() => {
+    window.electronAPI.getCodexStatus().then(setCodexStatus)
+  }, [])
+
   return (
     <div className="p-6 space-y-6">
       <Section title="AI Provider">
-        <Row label="API Key">
+        <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+          OmniCue uses your local Codex CLI login by default.
+          {codexStatus?.authenticated
+            ? ` Signed in${codexStatus.planType ? ` (${codexStatus.planType})` : ''}${codexStatus.model ? ` using ${codexStatus.model}` : ''}.`
+            : ' Run `codex login` in a terminal to enable it.'}
+          {' '}The fields below are optional OpenAI API fallback settings.
+        </div>
+        <Row label="OpenAI API Key">
           <input
             type="password"
             value={settings.aiApiKey}
             onChange={(e) => update({ aiApiKey: e.target.value })}
-            placeholder="sk-..."
+            placeholder="Optional fallback"
             className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
               text-[13px] text-white/80 border border-white/[0.08] outline-none
               focus:border-white/[0.2] transition-colors placeholder:text-white/20"
           />
         </Row>
-        <Row label="Model">
+        <Row label="Model Override">
           <input
             type="text"
             value={settings.aiModel}
             onChange={(e) => update({ aiModel: e.target.value })}
-            placeholder="gpt-4o"
+            placeholder="Leave empty for Codex default"
             className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
               text-[13px] text-white/80 border border-white/[0.08] outline-none
               focus:border-white/[0.2] transition-colors placeholder:text-white/20"
@@ -809,7 +826,7 @@ function AiTab({
             type="text"
             value={settings.aiBaseUrl}
             onChange={(e) => update({ aiBaseUrl: e.target.value })}
-            placeholder="Leave empty for default"
+            placeholder="Optional API fallback URL"
             className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
               text-[13px] text-white/80 border border-white/[0.08] outline-none
               focus:border-white/[0.2] transition-colors placeholder:text-white/20"

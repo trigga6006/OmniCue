@@ -4,6 +4,15 @@ let initialized = false
 let currentlyIgnoring = true
 
 /**
+ * No-op kept for API compatibility — click-through is now purely
+ * driven by `data-interactive` hit-testing so the companion panel
+ * doesn't block the entire window.
+ */
+export function setClickThroughLock(_locked: boolean): void {
+  // intentionally empty
+}
+
+/**
  * Force the overlay back into click-through mode.
  * Called on cleanup, errors, and as a keyboard escape hatch.
  */

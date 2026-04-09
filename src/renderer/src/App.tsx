@@ -20,7 +20,7 @@ import { FullScreenAlert } from '@/components/FullScreenAlert'
 import { AiButton } from '@/components/AiButton'
 import { CompanionPanel } from '@/components/CompanionPanel'
 import { useCompanionStore } from '@/stores/companionStore'
-import { COMPANION_HEIGHT } from '@/lib/constants'
+import { COMPANION_HEIGHT, PANEL_SIZES } from '@/lib/constants'
 import type { AppNotification, ActiveTimer } from '@/lib/types'
 
 // Bar top offset inside the window (px from top edge)
@@ -28,7 +28,7 @@ const BAR_TOP = 10
 // Fixed window width — generous enough for typical bar content (timers + notifications).
 // Using a fixed width avoids constant setBounds() during AnimatedSlot animations.
 // 800px covers ~5 timers + 3 expanded notifications comfortably.
-const WIN_WIDTH = 800
+const WIN_WIDTH = 1000
 // Base height when panels are closed vs open
 const BASE_HEIGHT = 500
 const PANEL_HEIGHT = 500
@@ -48,6 +48,7 @@ export default function App() {
 
   const settings = useSettingsStore((s) => s.settings)
   const companionVisible = useCompanionStore((s) => s.visible)
+  const panelSizeMode = useCompanionStore((s) => s.panelSizeMode)
 
   const [contextMenu, setContextMenu] = useState({ x: 0, y: 0, visible: false })
   const [showHistory, setShowHistory] = useState(false)
@@ -135,7 +136,7 @@ export default function App() {
         setShowHistory(false)
         setShowSettings(false)
         window.electronAPI.captureActiveWindow().then((result) => {
-          if (result) useCompanionStore.getState().setPendingScreenshot(result)
+          if (result) useCompanionStore.getState().setAutoScreenshot(result)
         })
         companion.open()
       } else {
@@ -163,9 +164,9 @@ export default function App() {
     if (companionVisible) {
       setShowHistory(false)
       setShowSettings(false)
-      window.electronAPI.setInteractiveLock(true)
+      window.electronAPI.setPanelOpen(true)
     } else {
-      window.electronAPI.setInteractiveLock(false)
+      window.electronAPI.setPanelOpen(false)
     }
   }, [companionVisible])
 
@@ -176,14 +177,17 @@ export default function App() {
   }, [showHistory, showSettings])
 
   useEffect(() => {
-    const height = companionVisible
-      ? COMPANION_HEIGHT
-      : (showHistory || showSettings) ? PANEL_HEIGHT : BASE_HEIGHT
-    if (height !== lastHeight.current) {
-      lastHeight.current = height
-      window.electronAPI.requestWindowResize(WIN_WIDTH, height)
+    if (companionVisible) {
+      const config = PANEL_SIZES[panelSizeMode]
+      window.electronAPI.requestWindowResize(config.windowW, config.windowH)
+    } else {
+      const height = (showHistory || showSettings) ? PANEL_HEIGHT : BASE_HEIGHT
+      if (height !== lastHeight.current) {
+        lastHeight.current = height
+        window.electronAPI.requestWindowResize(WIN_WIDTH, height)
+      }
     }
-  }, [showHistory, showSettings, companionVisible])
+  }, [showHistory, showSettings, companionVisible, panelSizeMode])
 
   // --- Drag: move the BrowserWindow itself ---
   const handleGripMouseDown = useCallback((e: React.MouseEvent) => {
@@ -366,12 +370,14 @@ export default function App() {
         anchorX={Math.round(window.innerWidth / 2)}
         anchorY={BAR_TOP}
       />
-      <CompanionPanel
-        visible={companionVisible}
-        onClose={() => useCompanionStore.getState().close()}
-        anchorX={Math.round(window.innerWidth / 2)}
-        anchorY={BAR_TOP}
-      />
+      <div className="pointer-events-auto">
+        <CompanionPanel
+          visible={companionVisible}
+          onClose={() => useCompanionStore.getState().close()}
+          anchorX={Math.round(window.innerWidth / 2)}
+          anchorY={BAR_TOP}
+        />
+      </div>
     </div>
   )
 }

@@ -16,4 +16,13 @@ export const DEFAULT_SETTINGS = {
 
 export const TIMER_CIRCLE_SIZE = 48
 export const PLUS_BUTTON_SIZE = 36
-export const COMPANION_HEIGHT = 600
+export const COMPANION_HEIGHT = 700
+
+export const PANEL_SIZES = {
+  compact: { panelMaxH: 440, panelW: 420, windowH: 700, windowW: 1000 },
+  tall:    { panelMaxH: 640, panelW: 420, windowH: 900, windowW: 1000 },
+  wide:    { panelMaxH: 440, panelW: 580, windowH: 700, windowW: 1400 },
+  large:   { panelMaxH: 640, panelW: 580, windowH: 900, windowW: 1400 },
+} as const
+
+export type PanelSizeMode = keyof typeof PANEL_SIZES

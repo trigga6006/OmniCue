@@ -1,8 +1,7 @@
 import { memo, useState, useRef, useCallback } from 'react'
 import { ArrowUp, Square, Camera } from 'lucide-react'
 import { useCompanionStore } from '@/stores/companionStore'
-import { generateId } from '@/lib/utils'
-import type { ChatMessage } from '@/lib/types'
+import { sendCompanionMessage } from '@/lib/sendMessage'
 
 interface CompanionInputProps {
   onClose: () => void
@@ -13,51 +12,33 @@ export const CompanionInput = memo(function CompanionInput({ onClose }: Companio
   const inputRef = useRef<HTMLInputElement>(null)
   const isStreaming = useCompanionStore((s) => s.isStreaming)
   const sessionId = useCompanionStore((s) => s.sessionId)
-  const messages = useCompanionStore((s) => s.messages)
-  const pendingScreenshot = useCompanionStore((s) => s.pendingScreenshot)
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const trimmed = text.trim()
     if (!trimmed || isStreaming) return
-
-    const store = useCompanionStore.getState()
-    const screenshot = store.pendingScreenshot
-    store.addUserMessage(trimmed, screenshot || undefined)
-
-    // Build CoreMessage array from conversation
-    const allMessages = [...store.messages]
-    // The addUserMessage call above already added the new message
-    const updatedMessages = useCompanionStore.getState().messages
-
-    const coreMessages = updatedMessages.map((m: ChatMessage) => {
-      if (m.role === 'user' && m.screenshot) {
-        return {
-          role: 'user' as const,
-          content: [
-            { type: 'image' as const, image: m.screenshot },
-            { type: 'text' as const, text: m.content },
-          ],
-        }
-      }
-      return { role: m.role, content: m.content }
-    })
-
-    const streamMsgId = generateId()
-    store.startStreaming(streamMsgId)
-
-    window.electronAPI.sendAiMessage({
-      messages: coreMessages,
-      sessionId: store.sessionId,
-    })
-
     setText('')
+    // Reset textarea height
+    if (inputRef.current) inputRef.current.style.height = 'auto'
+    await sendCompanionMessage(trimmed)
   }, [text, isStreaming])
 
   const handleAbort = useCallback(() => {
     window.electronAPI.abortAiStream(sessionId)
+    // Immediately reset UI — don't wait for backend callback
+    const store = useCompanionStore.getState()
+    if (store.isStreaming && store.streamingMessageId) {
+      const currentMsg = store.messages.find((m) => m.id === store.streamingMessageId)
+      if (currentMsg && !currentMsg.content) {
+        // No tokens received yet (thinking state) — show stopped message
+        store.finishStreaming('Stopped.')
+      } else {
+        // Partial response — just end the stream, keep what we have
+        store.finishStreaming(currentMsg?.content || '')
+      }
+    }
   }, [sessionId])
 
-  const handleRetakeScreenshot = useCallback(async () => {
+  const handleManualCapture = useCallback(async () => {
     const result = await window.electronAPI.captureActiveWindow()
     if (result) useCompanionStore.getState().setPendingScreenshot(result)
   }, [])
@@ -75,26 +56,32 @@ export const CompanionInput = memo(function CompanionInput({ onClose }: Companio
   )
 
   return (
-    <div className="flex items-center gap-2 px-3 py-2">
+    <div className="flex items-end gap-2 px-3 py-2">
       <button
-        onClick={handleRetakeScreenshot}
+        onClick={handleManualCapture}
         className="w-7 h-7 flex items-center justify-center rounded-full
-          text-[var(--g-text-dim)] hover:text-[var(--g-text)] hover:bg-[var(--g-bg-active)]
+          text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]
           transition-colors cursor-pointer shrink-0"
         title="Capture screen"
       >
         <Camera size={14} />
       </button>
 
-      <input
-        ref={inputRef}
-        type="text"
+      <textarea
+        ref={inputRef as React.RefObject<HTMLTextAreaElement>}
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          setText(e.target.value)
+          // Auto-grow height
+          e.target.style.height = 'auto'
+          e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'
+        }}
         onKeyDown={handleKeyDown}
         placeholder="Ask about your screen..."
+        rows={1}
         className="flex-1 bg-transparent text-[13px] text-[var(--g-text-bright)]
-          placeholder:text-[var(--g-text-dim)] outline-none"
+          placeholder:text-[var(--g-text-secondary)] outline-none resize-none
+          leading-[1.4] max-h-[120px] overflow-y-auto"
         autoFocus
       />
 
@@ -115,7 +102,7 @@ export const CompanionInput = memo(function CompanionInput({ onClose }: Companio
           className={`w-7 h-7 flex items-center justify-center rounded-full shrink-0
             transition-colors cursor-pointer ${
               text.trim()
-                ? 'bg-[var(--g-text-bright)] text-[var(--g-bg)] hover:opacity-90'
+                ? 'bg-[var(--g-bg-active)] text-[var(--g-text-bright)] hover:bg-[var(--g-bg-hover)]'
                 : 'text-[var(--g-text-dim)] opacity-40 cursor-default'
             }`}
           title="Send"

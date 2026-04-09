@@ -6,6 +6,7 @@ import { startServer } from './server'
 import { startScheduler } from './scheduler'
 import { overlayState } from './overlayState'
 import { settingsStore } from './store'
+import { cleanupAllTempImages } from './ai'
 import icon from '../../resources/icon.png?asset'
 import trayIconPath from '../../resources/tray-icon.png?asset'
 
@@ -14,12 +15,12 @@ let settingsWindow: BrowserWindow | null = null
 let tray: Tray | null = null
 
 // Default small window dimensions
-const DEFAULT_WIDTH = 800
-const DEFAULT_HEIGHT = 500
+const DEFAULT_WIDTH = 1000
+const DEFAULT_HEIGHT = 700
 
 function createWindow(): void {
   // Load saved bar position (screen coordinates) or default to primary center
-  const settings = settingsStore.get() as Record<string, unknown>
+  const settings = settingsStore.get() as unknown as Record<string, unknown>
   const primary = screen.getPrimaryDisplay()
   let barX = primary.bounds.x + Math.round(primary.bounds.width / 2)
   let barY = primary.bounds.y + 32
@@ -193,11 +194,13 @@ function startCursorPolling(win: BrowserWindow): void {
     const cursor = screen.getCursorScreenPoint()
     const b = win.getBounds()
 
+    const checkHeight = overlayState.panelOpen ? b.height : BAR_ZONE_HEIGHT
+
     if (
       cursor.x >= b.x - PAD &&
       cursor.x <= b.x + b.width + PAD &&
       cursor.y >= b.y - PAD &&
-      cursor.y <= b.y + BAR_ZONE_HEIGHT + PAD
+      cursor.y <= b.y + checkHeight + PAD
     ) {
       overlayState.isIgnoring = false
       win.setIgnoreMouseEvents(false)
@@ -236,7 +239,7 @@ app.whenReady().then(() => {
       if (!mainWindow.isVisible()) mainWindow.show()
       mainWindow.setIgnoreMouseEvents(false)
       overlayState.isIgnoring = false
-      overlayState.locked = true
+      overlayState.panelOpen = !overlayState.panelOpen
     }
   })
 
@@ -256,6 +259,7 @@ app.whenReady().then(() => {
 
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  cleanupAllTempImages().catch(() => {})
 })
 
 app.on('window-all-closed', () => {
