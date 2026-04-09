@@ -1,6 +1,7 @@
 import { memo } from 'react'
 import { motion } from 'motion/react'
-import type { ChatMessage } from '@/lib/types'
+import { Terminal, FileText, Search, Code, Globe } from 'lucide-react'
+import type { ChatMessage, ToolUseEntry } from '@/lib/types'
 import oiLogoGlass from '@/assets/oi-logo-glass.svg'
 import { MarkdownContent } from './MarkdownContent'
 
@@ -85,6 +86,14 @@ export const CompanionMessage = memo(function CompanionMessage({
             />
           </button>
         )}
+        {/* Tool use chips — compact, visually distinct */}
+        {!isUser && message.toolUses && message.toolUses.length > 0 && (
+          <div className="flex flex-col gap-1 mb-1.5">
+            {message.toolUses.map((tool, i) => (
+              <ToolUseChip key={i} tool={tool} />
+            ))}
+          </div>
+        )}
         {isUser ? (
           <div className="whitespace-pre-wrap break-words">{message.content}</div>
         ) : isStopped ? (
@@ -96,3 +105,37 @@ export const CompanionMessage = memo(function CompanionMessage({
     </div>
   )
 })
+
+const TOOL_ICONS: Record<string, typeof Terminal> = {
+  Bash: Terminal,
+  Read: FileText,
+  Grep: Search,
+  Glob: Search,
+  Edit: Code,
+  Write: Code,
+  WebSearch: Globe,
+  WebFetch: Globe,
+}
+
+function ToolUseChip({ tool }: { tool: ToolUseEntry }) {
+  const Icon = TOOL_ICONS[tool.name] || Terminal
+  const input = tool.input.length > 60 ? tool.input.slice(0, 57) + '...' : tool.input
+
+  return (
+    <div
+      className="flex items-center gap-1.5 px-2 py-1 rounded-lg
+        bg-[var(--g-bg-subtle)] border-[0.5px] border-[var(--g-line-faint)]
+        text-[10px] text-[var(--g-text-secondary)] font-mono leading-tight
+        overflow-hidden"
+    >
+      <Icon size={10} strokeWidth={2} className="shrink-0 opacity-60" />
+      <span className="font-semibold text-[var(--g-text-muted)] shrink-0">{tool.name}</span>
+      {input && (
+        <>
+          <span className="opacity-30">|</span>
+          <span className="truncate opacity-70">{input}</span>
+        </>
+      )}
+    </div>
+  )
+}

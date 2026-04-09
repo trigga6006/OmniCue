@@ -56,7 +56,7 @@ export const CompanionInput = memo(function CompanionInput({ onClose }: Companio
   )
 
   return (
-    <div className="flex items-end gap-2 px-3 py-2">
+    <div className="flex items-center gap-2 px-3 py-2">
       <button
         onClick={handleManualCapture}
         className="w-7 h-7 flex items-center justify-center rounded-full

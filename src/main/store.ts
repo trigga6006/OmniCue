@@ -36,10 +36,13 @@ interface SettingsData {
   fullScreenAlarms: boolean
   fullScreenReminders: boolean
   fullScreenClaude: boolean
+  aiProvider: 'codex' | 'claude' | 'openai'
   aiApiKey: string
   aiBaseUrl: string
   aiModel: string
   aiMode: 'fast' | 'auto' | 'pro'
+  claudeApiKey: string
+  claudeModel: string
 }
 
 const SETTINGS_DEFAULTS: SettingsData = {
@@ -51,10 +54,13 @@ const SETTINGS_DEFAULTS: SettingsData = {
   fullScreenAlarms: false,
   fullScreenReminders: false,
   fullScreenClaude: false,
+  aiProvider: 'codex',
   aiApiKey: '',
   aiBaseUrl: '',
   aiModel: '',
   aiMode: 'auto',
+  claudeApiKey: '',
+  claudeModel: '',
 }
 
 export const settingsStore = {

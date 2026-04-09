@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Timer, Bell, Repeat } from 'lucide-react'
 import { useTimerStore } from '@/stores/timerStore'
@@ -100,7 +100,15 @@ function shortDisplay(mode: Mode, value: number): string {
   return String(value)
 }
 
-export function TimerPill() {
+export function TimerPill({
+  bare = false,
+  onWidthChange,
+  onClipPathChange,
+}: {
+  bare?: boolean
+  onWidthChange?: (w: number) => void
+  onClipPathChange?: (path: string | undefined) => void
+} = {}) {
   const { setCreating, addTimer } = useTimerStore()
   const { settings } = useSettingsStore()
 
@@ -267,6 +275,15 @@ export function TimerPill() {
       )`
     : undefined
 
+  // Report width and clip-path to parent (MorphingPill) in bare mode
+  useLayoutEffect(() => {
+    if (bare) onWidthChange?.(currentW)
+  }, [bare, currentW, onWidthChange])
+
+  useLayoutEffect(() => {
+    if (bare) onClipPathChange?.(clipPath)
+  }, [bare, clipPath, onClipPathChange])
+
   return (
     <motion.div
       className="relative"
@@ -280,15 +297,17 @@ export function TimerPill() {
           : { duration: 0 }
       }
     >
-      {/* Pill background */}
-      <div
-        className="absolute inset-0 rounded-full backdrop-blur-2xl backdrop-saturate-[1.8]
-          bg-[var(--g-bg)] border-[0.5px] border-[var(--g-line)]"
-        style={{
-          ...glassStyle,
-          ...(clipPath ? { clipPath, WebkitClipPath: clipPath } : {}),
-        }}
-      />
+      {/* Pill background — hidden in bare mode (MorphingPill provides the surface) */}
+      {!bare && (
+        <div
+          className="absolute inset-0 rounded-full backdrop-blur-2xl backdrop-saturate-[1.8]
+            bg-[var(--g-bg)] border-[0.5px] border-[var(--g-line)]"
+          style={{
+            ...glassStyle,
+            ...(clipPath ? { clipPath, WebkitClipPath: clipPath } : {}),
+          }}
+        />
+      )}
 
       {/* Content */}
       <div className="absolute inset-0 flex items-center px-2">

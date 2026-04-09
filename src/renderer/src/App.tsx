@@ -1,10 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
-import { PlusButton } from '@/components/PlusButton'
-import { TimerPill } from '@/components/TimerPill'
-import { TimerCircle } from '@/components/TimerCircle'
-import { NotificationBubble } from '@/components/NotificationBubble'
-import { AnimatedSlot } from '@/components/AnimatedSlot'
+import { AnimatePresence, LayoutGroup } from 'motion/react'
+import { MorphingPill } from '@/components/MorphingPill'
 import { ContextMenu } from '@/components/ContextMenu'
 import { HistoryPanel } from '@/components/HistoryPanel'
 import { SettingsPanel } from '@/components/SettingsPanel'
@@ -17,10 +13,9 @@ import { generateId } from '@/lib/utils'
 import { useGlobalClickThrough } from '@/hooks/useClickThrough'
 import { useBrightnessSampler } from '@/hooks/useBrightnessSampler'
 import { FullScreenAlert } from '@/components/FullScreenAlert'
-import { AiButton } from '@/components/AiButton'
 import { CompanionPanel } from '@/components/CompanionPanel'
 import { useCompanionStore } from '@/stores/companionStore'
-import { COMPANION_HEIGHT, PANEL_SIZES } from '@/lib/constants'
+import { PANEL_SIZES } from '@/lib/constants'
 import type { AppNotification, ActiveTimer } from '@/lib/types'
 
 // Bar top offset inside the window (px from top edge)
@@ -40,13 +35,11 @@ export default function App() {
   const timers = useTimerStore((s) => s.timers)
   const addTimer = useTimerStore((s) => s.addTimer)
   const isCreating = useTimerStore((s) => s.isCreating)
-  const notifications = useNotificationStore((s) => s.notifications)
   const addNotification = useNotificationStore((s) => s.add)
   const loadSettings = useSettingsStore((s) => s.load)
   const loadHistory = useHistoryStore((s) => s.load)
   const addHistoryLocal = useHistoryStore((s) => s.addLocal)
 
-  const settings = useSettingsStore((s) => s.settings)
   const companionVisible = useCompanionStore((s) => s.visible)
   const panelSizeMode = useCompanionStore((s) => s.panelSizeMode)
 
@@ -278,106 +271,70 @@ export default function App() {
   // The BrowserWindow itself is positioned so this maps to the correct screen location.
   return (
     <div className="w-full h-full pointer-events-none select-none">
-      <div
-        className="fixed flex items-center pointer-events-none"
-        style={{
-          left: '50%',
-          top: BAR_TOP,
-          transform: 'translateX(-50%)',
-        }}
-        onMouseEnter={() => setIsHoveringBar(true)}
-        onMouseLeave={() => !isDragging && setIsHoveringBar(false)}
-      >
-        <div className="pointer-events-auto" data-interactive>
-          <PlusButton
+      <LayoutGroup>
+        <div
+          className="fixed flex items-center justify-center pointer-events-none"
+          style={{
+            left: '50%',
+            top: BAR_TOP,
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <MorphingPill
             onContextMenu={handleContextMenu}
             showGrip={showGrip}
             onGripMouseDown={handleGripMouseDown}
+            onMouseEnter={() => setIsHoveringBar(true)}
+            onMouseLeave={() => !isDragging && setIsHoveringBar(false)}
           />
         </div>
 
+        {/* Context menu */}
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          visible={contextMenu.visible}
+          onClose={() => setContextMenu((c) => ({ ...c, visible: false }))}
+          onHistory={() => setShowHistory(true)}
+          onSettings={() => window.electronAPI.openSettingsWindow('settings')}
+          onResetPosition={resetPosition}
+          onMoveToDisplay={moveToDisplay}
+        />
+
+        {/* Full-screen alert overlay */}
         <AnimatePresence>
-          {isCreating && (
-            <motion.div
-              key="pill"
-              className="pointer-events-auto shrink-0 overflow-visible"
-              data-interactive
-              initial={{ width: 0, opacity: 0, marginLeft: 0 }}
-              animate={{ width: 'auto', opacity: 1, marginLeft: 8 }}
-              exit={{ width: 0, opacity: 0, marginLeft: 0 }}
-              transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
-            >
-              <TimerPill />
-            </motion.div>
+          {fullScreenAlert && (
+            <FullScreenAlert
+              key="fs-alert"
+              message={fullScreenAlert.message}
+              source={fullScreenAlert.source}
+              onDismiss={dismissFullScreenAlert}
+            />
           )}
         </AnimatePresence>
 
-        <AnimatePresence>
-          {timers.map((timer) => (
-            <AnimatedSlot key={timer.id} className="pointer-events-auto" dataInteractive>
-              <TimerCircle timer={timer} onContextMenu={handleContextMenu} />
-            </AnimatedSlot>
-          ))}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {notifications.map((n) => (
-            <AnimatedSlot key={n.id} className="pointer-events-auto" dataInteractive>
-              <NotificationBubble notification={n} onContextMenu={handleContextMenu} />
-            </AnimatedSlot>
-          ))}
-        </AnimatePresence>
-
-        <div className="pointer-events-auto ml-2" data-interactive>
-          <AiButton />
-        </div>
-      </div>
-
-      {/* Context menu */}
-      <ContextMenu
-        x={contextMenu.x}
-        y={contextMenu.y}
-        visible={contextMenu.visible}
-        onClose={() => setContextMenu((c) => ({ ...c, visible: false }))}
-        onHistory={() => setShowHistory(true)}
-        onSettings={() => window.electronAPI.openSettingsWindow('settings')}
-        onResetPosition={resetPosition}
-        onMoveToDisplay={moveToDisplay}
-      />
-
-      {/* Full-screen alert overlay */}
-      <AnimatePresence>
-        {fullScreenAlert && (
-          <FullScreenAlert
-            key="fs-alert"
-            message={fullScreenAlert.message}
-            source={fullScreenAlert.source}
-            onDismiss={dismissFullScreenAlert}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Panels — anchored to window center, below the bar */}
-      <HistoryPanel
-        visible={showHistory}
-        onClose={() => setShowHistory(false)}
-        anchorX={Math.round(window.innerWidth / 2)}
-        anchorY={BAR_TOP}
-      />
-      <SettingsPanel
-        visible={showSettings}
-        onClose={() => setShowSettings(false)}
-        anchorX={Math.round(window.innerWidth / 2)}
-        anchorY={BAR_TOP}
-      />
-      <div className="pointer-events-auto">
-        <CompanionPanel
-          visible={companionVisible}
-          onClose={() => useCompanionStore.getState().close()}
+        {/* Panels — anchored to window center, below the bar */}
+        <HistoryPanel
+          visible={showHistory}
+          onClose={() => setShowHistory(false)}
           anchorX={Math.round(window.innerWidth / 2)}
           anchorY={BAR_TOP}
         />
-      </div>
+        <SettingsPanel
+          visible={showSettings}
+          onClose={() => setShowSettings(false)}
+          anchorX={Math.round(window.innerWidth / 2)}
+          anchorY={BAR_TOP}
+        />
+        <div className="pointer-events-auto">
+          <CompanionPanel
+            visible={companionVisible}
+            onClose={() => useCompanionStore.getState().close()}
+            anchorX={Math.round(window.innerWidth / 2)}
+            anchorY={BAR_TOP}
+          />
+        </div>
+      </LayoutGroup>
     </div>
   )
 }

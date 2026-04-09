@@ -1,7 +1,7 @@
 import { useCompanionStore } from '@/stores/companionStore'
-import { resolveModel, MODELS } from '@/lib/modelRouter'
+import { resolveModel, isProModel } from '@/lib/modelRouter'
 import { generateId } from '@/lib/utils'
-import type { ChatMessage } from '@/lib/types'
+import type { ChatMessage, AiProvider } from '@/lib/types'
 
 /**
  * Shared send logic used by CompanionInput and quick actions.
@@ -62,8 +62,13 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     return { role: m.role, content: m.content }
   })
 
+  // Get provider from settings (cached in store or fetched)
+  const settings = await window.electronAPI.getSettings()
+  const provider: AiProvider = settings.aiProvider || 'codex'
+
   const resolvedModel = resolveModel({
     mode: store.aiMode,
+    provider,
     userText: text,
     ocrText: store.autoScreenshot?.ocrText,
     screenType: store.autoScreenshot?.screenType,
@@ -72,7 +77,7 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     sessionEscalatedToPro: store.sessionEscalatedToPro,
   })
 
-  if (store.aiMode === 'auto' && resolvedModel === MODELS.pro) {
+  if (store.aiMode === 'auto' && isProModel(resolvedModel)) {
     store.markSessionEscalatedToPro()
   }
 
@@ -83,5 +88,6 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     messages: coreMessages,
     sessionId: store.sessionId,
     model: resolvedModel,
+    provider,
   })
 }

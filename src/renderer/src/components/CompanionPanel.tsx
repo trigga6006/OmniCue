@@ -86,10 +86,17 @@ export const CompanionPanel = memo(function CompanionPanel({
       }
     })
 
+    const unsubTool = window.electronAPI.onAiToolUse((data) => {
+      if (data.sessionId === store().sessionId) {
+        store().addToolUse(data.toolName, data.toolInput)
+      }
+    })
+
     return () => {
       unsubToken()
       unsubDone()
       unsubError()
+      unsubTool()
     }
   }, [visible, sessionId])
 
@@ -117,8 +124,8 @@ export const CompanionPanel = memo(function CompanionPanel({
         {visible && !expandedScreenshot && (
           <motion.div
             className="fixed z-50 flex flex-col
-              backdrop-blur-2xl backdrop-saturate-[1.6]
-              bg-[rgba(18,18,22,0.55)] border-[0.5px] border-[rgba(255,255,255,0.12)]
+              backdrop-blur-3xl backdrop-saturate-[1.6]
+              bg-[rgba(14,14,18,0.93)] border-[0.5px] border-[rgba(255,255,255,0.12)]
               rounded-2xl overflow-hidden"
             style={{
               ...glassCompanionStyle,

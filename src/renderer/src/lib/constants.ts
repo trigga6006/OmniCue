@@ -12,6 +12,16 @@ export const DEFAULT_SETTINGS = {
   soundVolume: 0.7,
   autoLaunch: false,
   theme: 'dark' as const,
+  fullScreenAlarms: false,
+  fullScreenReminders: false,
+  fullScreenClaude: false,
+  aiProvider: 'codex' as const,
+  aiApiKey: '',
+  aiBaseUrl: '',
+  aiModel: '',
+  aiMode: 'auto' as const,
+  claudeApiKey: '',
+  claudeModel: '',
 }
 
 export const TIMER_CIRCLE_SIZE = 48
@@ -26,3 +36,12 @@ export const PANEL_SIZES = {
 } as const
 
 export type PanelSizeMode = keyof typeof PANEL_SIZES
+
+// Morphing Pill dimensions
+export const PILL_H = 36
+export const PILL_PADDING = 4
+export const PILL_ICON_SIZE = 28
+export const PILL_DIVIDER_W = 17 // 1px line + 8px padding each side
+export const PILL_TIMER_SLOT = 36
+export const PILL_NOTIF_COLLAPSED = 36
+export const PILL_NOTIF_EXPANDED = 260

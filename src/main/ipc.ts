@@ -7,6 +7,7 @@ import { overlayState } from './overlayState'
 import { streamAiResponse, cleanupSession, type ChatMessage } from './ai'
 import { extractTextFromScreenshot, type ScreenType } from './ocr'
 import { getCodexStatus } from './codex-auth'
+import { getClaudeStatus } from './claude-auth'
 
 const activeStreams = new Map<string, AbortController>()
 
@@ -312,6 +313,10 @@ export function registerIpcHandlers(): void {
     return getCodexStatus()
   })
 
+  ipcMain.handle('get-claude-status', () => {
+    return getClaudeStatus()
+  })
+
   // ─── AI Companion ────────────────────────────────────────────────────────────
 
   // Pending OCR results keyed by a simple counter
@@ -324,18 +329,19 @@ export function registerIpcHandlers(): void {
     ocrId: number
   } | null> => {
     try {
+      // Capture the full primary screen — more reliable than individual windows on Windows,
+      // and always shows exactly what the user sees on their desktop.
       const sources = await desktopCapturer.getSources({
-        types: ['window'],
-        thumbnailSize: { width: 1280, height: 720 },
+        types: ['screen'],
+        thumbnailSize: { width: 1920, height: 1080 },
         fetchWindowIcons: false,
       })
 
-      const ownIds = new Set(BrowserWindow.getAllWindows().map((w) => w.getMediaSourceId()))
-      const active = sources.find((s) => !ownIds.has(s.id))
-      if (!active) return null
+      const primary = sources[0]
+      if (!primary) return null
 
-      const image = active.thumbnail.toDataURL()
-      const title = active.name
+      const image = primary.thumbnail.toDataURL()
+      const title = 'Desktop'
       const ocrId = ++ocrCounter
 
       // Fire OCR in background — don't block the UI
@@ -368,7 +374,7 @@ export function registerIpcHandlers(): void {
     'ai:send-message',
     async (
       event,
-      payload: { messages: unknown[]; sessionId: string; model?: string }
+      payload: { messages: unknown[]; sessionId: string; model?: string; provider?: string }
     ): Promise<{ ok: boolean }> => {
       const win = BrowserWindow.fromWebContents(event.sender)
       if (!win) return { ok: false }
@@ -403,9 +409,18 @@ export function registerIpcHandlers(): void {
                 error,
               })
           },
+          onToolUse: (toolName, toolInput) => {
+            if (!win.isDestroyed())
+              win.webContents.send('ai:tool-use', {
+                sessionId: payload.sessionId,
+                toolName,
+                toolInput,
+              })
+          },
         },
         controller.signal,
-        payload.model
+        payload.model,
+        payload.provider
       ).catch((err) => {
         activeStreams.delete(payload.sessionId)
         if (!win.isDestroyed())

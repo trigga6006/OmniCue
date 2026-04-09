@@ -785,55 +785,191 @@ function AiTab({
     model?: string
   } | null>(null)
 
+  const provider = settings.aiProvider || 'codex'
+
   useEffect(() => {
     window.electronAPI.getCodexStatus().then(setCodexStatus)
   }, [])
 
+  const providerOptions = [
+    { key: 'codex' as const, label: 'Codex', desc: 'OpenAI Codex CLI' },
+    { key: 'claude' as const, label: 'Claude', desc: 'Anthropic Claude API' },
+    { key: 'openai' as const, label: 'OpenAI', desc: 'Direct OpenAI API' },
+  ]
+
   return (
     <div className="p-6 space-y-6">
       <Section title="AI Provider">
-        <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
-          OmniCue uses your local Codex CLI login by default.
-          {codexStatus?.authenticated
-            ? ` Signed in${codexStatus.planType ? ` (${codexStatus.planType})` : ''}${codexStatus.model ? ` using ${codexStatus.model}` : ''}.`
-            : ' Run `codex login` in a terminal to enable it.'}
-          {' '}The fields below are optional OpenAI API fallback settings.
+        <div className="px-4 py-3">
+          <div className="flex gap-2">
+            {providerOptions.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => update({ aiProvider: p.key })}
+                className={`flex-1 px-3 py-2 rounded-lg text-center transition-all cursor-pointer border ${
+                  provider === p.key
+                    ? 'bg-white/[0.1] border-white/[0.2] text-white/90'
+                    : 'bg-white/[0.03] border-white/[0.06] text-white/40 hover:bg-white/[0.06] hover:text-white/60'
+                }`}
+              >
+                <div className="text-[13px] font-medium">{p.label}</div>
+                <div className="text-[10px] mt-0.5 opacity-60">{p.desc}</div>
+              </button>
+            ))}
+          </div>
         </div>
-        <Row label="OpenAI API Key">
-          <input
-            type="password"
-            value={settings.aiApiKey}
-            onChange={(e) => update({ aiApiKey: e.target.value })}
-            placeholder="Optional fallback"
-            className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
-              text-[13px] text-white/80 border border-white/[0.08] outline-none
-              focus:border-white/[0.2] transition-colors placeholder:text-white/20"
-          />
-        </Row>
-        <Row label="Model Override">
-          <input
-            type="text"
-            value={settings.aiModel}
-            onChange={(e) => update({ aiModel: e.target.value })}
-            placeholder="Leave empty for Codex default"
-            className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
-              text-[13px] text-white/80 border border-white/[0.08] outline-none
-              focus:border-white/[0.2] transition-colors placeholder:text-white/20"
-          />
-        </Row>
-        <Row label="Base URL">
-          <input
-            type="text"
-            value={settings.aiBaseUrl}
-            onChange={(e) => update({ aiBaseUrl: e.target.value })}
-            placeholder="Optional API fallback URL"
-            className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
-              text-[13px] text-white/80 border border-white/[0.08] outline-none
-              focus:border-white/[0.2] transition-colors placeholder:text-white/20"
-          />
-        </Row>
+
+        {provider === 'codex' && (
+          <>
+            <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+              Uses your local Codex CLI login.
+              {codexStatus?.authenticated
+                ? ` Signed in${codexStatus.planType ? ` (${codexStatus.planType})` : ''}${codexStatus.model ? ` using ${codexStatus.model}` : ''}.`
+                : ' Run `codex login` in a terminal to enable it.'}
+            </div>
+            <Row label="OpenAI API Key">
+              <input
+                type="password"
+                value={settings.aiApiKey}
+                onChange={(e) => update({ aiApiKey: e.target.value })}
+                placeholder="Optional fallback"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Model Override">
+              <input
+                type="text"
+                value={settings.aiModel}
+                onChange={(e) => update({ aiModel: e.target.value })}
+                placeholder="Leave empty for default"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Base URL">
+              <input
+                type="text"
+                value={settings.aiBaseUrl}
+                onChange={(e) => update({ aiBaseUrl: e.target.value })}
+                placeholder="Optional API fallback URL"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+          </>
+        )}
+
+        {provider === 'claude' && (
+          <ClaudeSettings settings={settings} update={update} />
+        )}
+
+        {provider === 'openai' && (
+          <>
+            <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+              Direct OpenAI API access. Requires an API key from{' '}
+              <span className="text-white/50">platform.openai.com</span>.
+            </div>
+            <Row label="OpenAI API Key">
+              <input
+                type="password"
+                value={settings.aiApiKey}
+                onChange={(e) => update({ aiApiKey: e.target.value })}
+                placeholder="sk-..."
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Model">
+              <input
+                type="text"
+                value={settings.aiModel}
+                onChange={(e) => update({ aiModel: e.target.value })}
+                placeholder="gpt-4o"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Base URL">
+              <input
+                type="text"
+                value={settings.aiBaseUrl}
+                onChange={(e) => update({ aiBaseUrl: e.target.value })}
+                placeholder="https://api.openai.com/v1"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+          </>
+        )}
       </Section>
     </div>
+  )
+}
+
+function ClaudeSettings({
+  settings,
+  update,
+}: {
+  settings: ReturnType<typeof useSettingsStore.getState>['settings']
+  update: ReturnType<typeof useSettingsStore.getState>['update']
+}) {
+  const [claudeStatus, setClaudeStatus] = useState<{
+    authenticated: boolean
+    planType?: string
+  } | null>(null)
+
+  useEffect(() => {
+    window.electronAPI.getClaudeStatus().then(setClaudeStatus)
+  }, [])
+
+  return (
+    <>
+      <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+        {claudeStatus?.authenticated ? (
+          <>
+            <span className="text-green-400/80">Claude Code CLI authenticated</span>
+            {claudeStatus.planType ? ` (${claudeStatus.planType})` : ''}.
+            {' '}Your Max subscription will be used automatically.
+            The API key below is an optional fallback if the CLI is unavailable.
+          </>
+        ) : (
+          <>
+            Claude Code CLI not detected. Run{' '}
+            <span className="text-white/50 font-mono">claude login</span>{' '}
+            in a terminal to use your Max subscription, or add an API key below.
+          </>
+        )}
+      </div>
+      <Row label="API Key (optional)">
+        <input
+          type="password"
+          value={settings.claudeApiKey}
+          onChange={(e) => update({ claudeApiKey: e.target.value })}
+          placeholder={claudeStatus?.authenticated ? 'Using Max subscription' : 'sk-ant-...'}
+          className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+            text-[13px] text-white/80 border border-white/[0.08] outline-none
+            focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+        />
+      </Row>
+      <Row label="Model Override">
+        <input
+          type="text"
+          value={settings.claudeModel}
+          onChange={(e) => update({ claudeModel: e.target.value })}
+          placeholder="Leave empty for auto"
+          className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+            text-[13px] text-white/80 border border-white/[0.08] outline-none
+            focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+        />
+      </Row>
+    </>
   )
 }
 

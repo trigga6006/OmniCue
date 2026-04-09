@@ -38,6 +38,7 @@ interface CompanionState {
   addUserMessage: (content: string) => void
   startStreaming: (messageId: string) => void
   appendToken: (token: string) => void
+  addToolUse: (toolName: string, toolInput: string) => void
   finishStreaming: (fullText: string) => void
   streamError: (error: string) => void
   setAutoScreenshot: (s: ScreenshotData | null) => void
@@ -110,6 +111,15 @@ export const useCompanionStore = create<CompanionState>((set) => ({
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === s.streamingMessageId ? { ...m, content: m.content + token } : m
+      ),
+    })),
+
+  addToolUse: (toolName, toolInput) =>
+    set((s) => ({
+      messages: s.messages.map((m) =>
+        m.id === s.streamingMessageId
+          ? { ...m, toolUses: [...(m.toolUses || []), { name: toolName, input: toolInput }] }
+          : m
       ),
     })),
 

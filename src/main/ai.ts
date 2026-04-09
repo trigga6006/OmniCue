@@ -3,13 +3,16 @@ import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import Anthropic from '@anthropic-ai/sdk'
 import { settingsStore } from './store'
 import { getCodexModel, getCodexStatus } from './codex-auth'
+import { getClaudeStatus } from './claude-auth'
 
 export interface AiStreamCallbacks {
   onToken: (token: string) => void
   onFinish: (fullText: string) => void
   onError: (error: string) => void
+  onToolUse?: (toolName: string, toolInput: string) => void
 }
 
 const SYSTEM_PROMPT = `You are OmniCue, a concise desktop AI companion. Be helpful, brief, and specific. Prefer bullet points and short paragraphs over walls of text. You may use Markdown formatting: bold, italic, inline code, fenced code blocks with language tags, lists, and headers. Keep formatting purposeful and avoid unnecessary decoration for simple answers.
@@ -747,6 +750,239 @@ async function streamViaOpenAiApi(
   callbacks.onFinish(fullText)
 }
 
+/** Convert OpenAI-shaped messages to Anthropic format */
+function toAnthropicMessages(
+  messages: ChatMessage[]
+): Anthropic.MessageParam[] {
+  return messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => {
+      if (typeof m.content === 'string') {
+        return { role: m.role as 'user' | 'assistant', content: m.content }
+      }
+
+      // Multi-part: convert image_url + text to Anthropic content blocks
+      const blocks: Anthropic.ContentBlockParam[] = []
+      for (const part of m.content) {
+        if (part.type === 'text' && part.text) {
+          blocks.push({ type: 'text', text: part.text })
+        } else if (part.type === 'image_url' && part.image_url?.url) {
+          const dataUrl = part.image_url.url
+          const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/)
+          if (match) {
+            blocks.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: match[1] as 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp',
+                data: match[2],
+              },
+            })
+          }
+        }
+      }
+
+      if (blocks.length === 0) {
+        blocks.push({ type: 'text', text: '[No content]' })
+      }
+
+      return { role: m.role as 'user' | 'assistant', content: blocks }
+    })
+}
+
+async function streamViaClaudeApi(
+  messages: ChatMessage[],
+  callbacks: AiStreamCallbacks,
+  abortSignal?: AbortSignal,
+  modelOverride?: string
+): Promise<void> {
+  const settings = settingsStore.get()
+  const apiKey = settings.claudeApiKey || ''
+  const model = modelOverride || settings.claudeModel || 'claude-sonnet-4-6-20250514'
+
+  if (!apiKey) {
+    throw new Error(
+      'No Claude API key configured. Add your Anthropic API key in Settings → AI Settings.'
+    )
+  }
+
+  const client = new Anthropic({ apiKey })
+  const anthropicMessages = toAnthropicMessages(messages)
+
+  let fullText = ''
+
+  const stream = await client.messages.stream({
+    model,
+    max_tokens: 4096,
+    system: SYSTEM_PROMPT,
+    messages: anthropicMessages,
+  }, { signal: abortSignal ?? undefined })
+
+  for await (const event of stream) {
+    if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
+      const delta = event.delta.text
+      fullText += delta
+      callbacks.onToken(delta)
+    }
+  }
+
+  callbacks.onFinish(fullText)
+}
+
+function getClaudeCliCommand(): { command: string; args: string[] } {
+  const baseArgs = [
+    '-p',               // print mode (non-interactive)
+    '--output-format', 'stream-json',
+    '--verbose',
+    '--include-partial-messages',
+  ]
+
+  if (process.platform === 'win32') {
+    return {
+      command: process.env.ComSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', `claude ${baseArgs.map(quoteForCmd).join(' ')}`],
+    }
+  }
+
+  return { command: 'claude', args: baseArgs }
+}
+
+async function streamViaClaudeCodeCli(
+  messages: ChatMessage[],
+  callbacks: AiStreamCallbacks,
+  abortSignal?: AbortSignal,
+  _modelOverride?: string
+): Promise<void> {
+  // Claude Code CLI doesn't support --image, so we pass context as text only
+  const prompt = buildCodexPrompt(messages)
+
+  const { command, args } = getClaudeCliCommand()
+
+  const child = spawn(command, args, {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  })
+
+  let stdoutBuffer = ''
+  let stderrBuffer = ''
+  let fullText = ''
+  // Track current tool use being streamed
+  let currentToolName: string | null = null
+  let currentToolInput = ''
+
+  const handleAbort = (): void => {
+    try {
+      child.kill()
+    } catch {
+      // Ignore abort race conditions.
+    }
+  }
+
+  abortSignal?.addEventListener('abort', handleAbort, { once: true })
+  child.stdin.end(prompt)
+
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString('utf8')
+    const lines = stdoutBuffer.split(/\r?\n/)
+    stdoutBuffer = lines.pop() || ''
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('{')) continue
+
+      try {
+        const event = JSON.parse(trimmed) as Record<string, unknown>
+
+        if (event.type === 'stream_event') {
+          const inner = event.event as Record<string, unknown> | undefined
+          if (!inner) continue
+
+          // Text streaming delta
+          if (inner.type === 'content_block_delta') {
+            const delta = inner.delta as Record<string, unknown> | undefined
+            if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
+              fullText += delta.text
+              callbacks.onToken(delta.text)
+            }
+            // Tool input JSON delta — accumulate
+            if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
+              currentToolInput += delta.partial_json
+            }
+          }
+
+          // Tool use start
+          if (inner.type === 'content_block_start') {
+            const block = inner.content_block as Record<string, unknown> | undefined
+            if (block?.type === 'tool_use' && typeof block.name === 'string') {
+              currentToolName = block.name
+              currentToolInput = ''
+            }
+          }
+
+          // Tool use end — emit the completed tool call
+          if (inner.type === 'content_block_stop' && currentToolName) {
+            // Try to extract a concise summary from the JSON input
+            let summary = currentToolInput
+            try {
+              const parsed = JSON.parse(currentToolInput)
+              // For common tools, pick the most useful field
+              summary = parsed.command || parsed.pattern || parsed.file_path || parsed.content?.slice(0, 80) || currentToolInput
+            } catch {
+              // Use raw input if not valid JSON
+            }
+            callbacks.onToolUse?.(currentToolName, summary)
+            currentToolName = null
+            currentToolInput = ''
+          }
+        }
+
+        // Final result
+        if (event.type === 'result' && typeof event.result === 'string') {
+          fullText = event.result
+        }
+      } catch {
+        // Ignore malformed lines
+      }
+    }
+  })
+
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrBuffer += chunk.toString('utf8')
+  })
+
+  return new Promise((resolve, reject) => {
+    child.on('error', (error) => {
+      abortSignal?.removeEventListener('abort', handleAbort)
+      reject(error)
+    })
+
+    child.on('close', (code) => {
+      abortSignal?.removeEventListener('abort', handleAbort)
+
+      if (abortSignal?.aborted) {
+        resolve()
+        return
+      }
+
+      if (fullText) {
+        callbacks.onFinish(fullText)
+        resolve()
+        return
+      }
+
+      const stderrSummary = stderrBuffer
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .join('\n')
+
+      reject(new Error(stderrSummary || `Claude Code exited without a response (code ${code ?? 'unknown'}).`))
+    })
+  })
+}
+
 function resolveBackendModel(modelOverride?: string): string {
   if (modelOverride) return modelOverride
   const settings = settingsStore.get()
@@ -758,12 +994,57 @@ export async function streamAiResponse(
   messages: ChatMessage[],
   callbacks: AiStreamCallbacks,
   abortSignal?: AbortSignal,
-  modelOverride?: string
+  modelOverride?: string,
+  provider?: string
 ): Promise<void> {
-  const model = resolveBackendModel(modelOverride)
-  console.log(`[OmniCue] Model for this turn: ${model}`)
-
   const settings = settingsStore.get()
+  const resolvedProvider = provider || settings.aiProvider || 'codex'
+  const model = modelOverride || resolveBackendModel()
+  console.log(`[OmniCue] Provider: ${resolvedProvider}, Model: ${model}`)
+
+  // Claude provider — try Claude Code CLI first (uses Max subscription), fall back to Anthropic API
+  if (resolvedProvider === 'claude') {
+    const claudeStatus = getClaudeStatus()
+
+    if (claudeStatus.authenticated) {
+      // Tier 1: Claude Code CLI (uses Max/Pro subscription)
+      try {
+        await streamViaClaudeCodeCli(messages, callbacks, abortSignal, model)
+        return
+      } catch (cliErr) {
+        const cliMsg = cliErr instanceof Error ? cliErr.message : String(cliErr)
+        console.warn('[OmniCue] Claude Code CLI failed, trying Anthropic API fallback:', cliMsg)
+
+        if (!settings.claudeApiKey) {
+          callbacks.onError(`Claude Code CLI failed: ${cliMsg}`)
+          return
+        }
+        // Fall through to Anthropic API
+      }
+    }
+
+    // Tier 2: Direct Anthropic API (requires API key)
+    try {
+      await streamViaClaudeApi(messages, callbacks, abortSignal, model)
+    } catch (error) {
+      if (abortSignal?.aborted) return
+      callbacks.onError(error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
+  // OpenAI provider — direct API (no Codex)
+  if (resolvedProvider === 'openai') {
+    try {
+      await streamViaOpenAiApi(messages, callbacks, abortSignal, model)
+    } catch (error) {
+      if (abortSignal?.aborted) return
+      callbacks.onError(error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
+  // Codex provider (default) — tiered fallback
   const codexStatus = getCodexStatus()
 
   if (codexStatus.authenticated) {

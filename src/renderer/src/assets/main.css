@@ -13,13 +13,13 @@
 
 :root {
   /* Surface fills */
-  --g-bg: rgba(255, 255, 255, 0.08);
-  --g-bg-hover: rgba(255, 255, 255, 0.12);
-  --g-bg-active: rgba(255, 255, 255, 0.14);
-  --g-bg-subtle: rgba(255, 255, 255, 0.04);
+  --g-bg: rgba(12, 12, 16, 0.55);
+  --g-bg-hover: rgba(12, 12, 16, 0.62);
+  --g-bg-active: rgba(12, 12, 16, 0.68);
+  --g-bg-subtle: rgba(12, 12, 16, 0.35);
   --g-bg-pulse: rgba(255, 255, 255, 0.12);
-  --g-bg-strong: rgba(18, 22, 30, 0.84);
-  --g-overlay-strong: rgba(8, 12, 18, 0.56);
+  --g-bg-strong: rgba(14, 16, 22, 0.9);
+  --g-overlay-strong: rgba(8, 10, 16, 0.65);
 
   /* Borders */
   --g-line: rgba(255, 255, 255, 0.12);

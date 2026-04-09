@@ -1,9 +1,16 @@
 export type ChatRole = 'user' | 'assistant'
 
+export interface ToolUseEntry {
+  name: string
+  input: string
+}
+
 export interface ChatMessage {
   id: string
   role: ChatRole
   content: string
+  /** Tool calls made during this assistant message */
+  toolUses?: ToolUseEntry[]
   /** Auto-captured screenshot (hidden from UI, always sent as context) */
   screenshot?: string
   screenshotTitle?: string
@@ -35,6 +42,8 @@ export interface HistoryEntry {
   type?: EntryType
 }
 
+export type AiProvider = 'codex' | 'claude' | 'openai'
+
 export interface Settings {
   defaultDuration: number
   soundEnabled: boolean
@@ -44,10 +53,13 @@ export interface Settings {
   fullScreenAlarms: boolean
   fullScreenReminders: boolean
   fullScreenClaude: boolean
+  aiProvider: AiProvider
   aiApiKey: string
   aiBaseUrl: string
   aiModel: string
   aiMode: 'fast' | 'auto' | 'pro'
+  claudeApiKey: string
+  claudeModel: string
 }
 
 export interface AppNotification {
@@ -113,14 +125,16 @@ export interface ElectronAPI {
   sendTestAlert: () => void
   captureActiveWindow: () => Promise<{ image: string; title: string; ocrId: number } | null>
   getOcrResult: (ocrId: number) => Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>
-  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; model?: string }) => Promise<{ ok: boolean }>
+  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; model?: string; provider?: string }) => Promise<{ ok: boolean }>
   abortAiStream: (sessionId: string) => void
   cleanupAiSession: (sessionId: string) => void
   onAiStreamToken: (cb: (data: { sessionId: string; token: string }) => void) => () => void
   onAiStreamDone: (cb: (data: { sessionId: string; fullText: string }) => void) => () => void
   onAiStreamError: (cb: (data: { sessionId: string; error: string }) => void) => () => void
+  onAiToolUse: (cb: (data: { sessionId: string; toolName: string; toolInput: string }) => void) => () => void
   onToggleCompanion: (cb: () => void) => () => void
   getCodexStatus: () => Promise<{ authenticated: boolean; planType?: string; model?: string }>
+  getClaudeStatus: () => Promise<{ authenticated: boolean; planType?: string }>
   openExternalUrl: (url: string) => Promise<boolean>
 }
 
