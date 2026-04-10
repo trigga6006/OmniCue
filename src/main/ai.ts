@@ -5,19 +5,53 @@ import { join } from 'path'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import Anthropic from '@anthropic-ai/sdk'
 import { settingsStore } from './store'
-import { getCodexModel, getCodexStatus } from './codex-auth'
+import { getCodexStatus } from './codex-auth'
 import { getClaudeStatus } from './claude-auth'
+import {
+  registerPendingRequest,
+  normalizeCodexCommandApproval,
+  normalizeCodexFileChangeApproval,
+  normalizeCodexUserInput,
+  normalizeCodexUnsupported,
+} from './agent-interactions'
 
 export interface AiStreamCallbacks {
   onToken: (token: string) => void
   onFinish: (fullText: string) => void
   onError: (error: string) => void
   onToolUse?: (toolName: string, toolInput: string) => void
+  onInteractionRequest?: (request: import('./agent-interactions').AgentInteractionRequest) => void
 }
 
 const SYSTEM_PROMPT = `You are OmniCue, a concise desktop AI companion. Be helpful, brief, and specific. Prefer bullet points and short paragraphs over walls of text. You may use Markdown formatting: bold, italic, inline code, fenced code blocks with language tags, lists, and headers. Keep formatting purposeful and avoid unnecessary decoration for simple answers.
 
 You may receive a screenshot of the user's screen and extracted text as context with each message. This context is captured automatically — the user may or may not be asking about it. Only reference the screen context if the user's question clearly relates to what's visible. For general questions unrelated to the screen, respond normally without mentioning the screenshot or screen text.`
+
+const CODEX_INTERACTION_INSTRUCTIONS = `OmniCue supports interactive requests from Codex.
+
+When you need the user to explicitly choose, confirm, or fill in information before you can continue, use the built-in interactive request path instead of simulating it in plain text.
+
+Use an interactive request when:
+- you want the user to choose from a short list of options
+- you need one or more follow-up questions answered before continuing
+- you need explicit confirmation before taking an action
+- you need freeform or secret input from the user
+
+Do not fake interactivity by printing "A, B, C, D" or by asking the user to reply with an option when the interactive request path would fit.
+
+Never claim that you are using the interactive UI unless you actually send a real interactive request through the Codex interaction path.
+
+If the user does not need to respond for you to continue, answer normally in chat.`
+
+const NON_INTERACTIVE_SESSION_INSTRUCTIONS = `This session cannot open OmniCue's native interactive picker UI.
+
+If you need the user to choose, confirm, or provide input, ask in normal chat text instead of claiming that you opened a picker, chooser, or approval dialog.
+
+Do not say that you are "using the interactive picker" or "waiting on the UI" in this session.`
+
+function getCodexSystemPrompt(): string {
+  return `${SYSTEM_PROMPT}\n\n${CODEX_INTERACTION_INSTRUCTIONS}`
+}
 
 interface MessagePart {
   type: string
@@ -28,6 +62,9 @@ interface MessagePart {
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
   content: string | MessagePart[]
+  ocrText?: string
+  screenshotTitle?: string
+  manualScreenshotTitle?: string
 }
 
 interface PreparedImage {
@@ -47,6 +84,12 @@ interface SessionState {
   callbacks: AiStreamCallbacks | null
   accumulatedText: string
   tempImages: PreparedImage[]
+  cwd: string
+  permissions: AgentPermissions
+  /** Track the current assistant item to detect multi-item turns */
+  currentItemId: string | null
+  /** How many assistant items have completed in this turn */
+  completedItemCount: number
 }
 
 function getTextContent(content: ChatMessage['content']): string {
@@ -72,7 +115,7 @@ function normalizeLineBreaks(value: string): string {
   return value.replace(/\r\n/g, '\n').trim()
 }
 
-function buildCodexPrompt(messages: ChatMessage[]): string {
+function buildPrompt(messages: ChatMessage[], systemPrompt: string): string {
   const conversation = messages
     .map((message) => {
       const text = getTextContent(message.content) || '[No text content]'
@@ -89,7 +132,7 @@ function buildCodexPrompt(messages: ChatMessage[]): string {
     .join('\n\n')
 
   return [
-    SYSTEM_PROMPT,
+    systemPrompt,
     '',
     'You are replying inside a compact desktop chat panel.',
     'Respond to the latest user message, keep the answer concise, and use any attached screenshot as context.',
@@ -97,6 +140,10 @@ function buildCodexPrompt(messages: ChatMessage[]): string {
     'Conversation:',
     conversation,
   ].join('\n')
+}
+
+function buildNonInteractivePrompt(messages: ChatMessage[]): string {
+  return buildPrompt(messages, `${SYSTEM_PROMPT}\n\n${NON_INTERACTIVE_SESSION_INSTRUCTIONS}`)
 }
 
 async function writeDataUrlToTempFile(dataUrl: string): Promise<PreparedImage> {
@@ -155,9 +202,23 @@ class CodexAppServerClient {
     messages: ChatMessage[],
     callbacks: AiStreamCallbacks,
     abortSignal?: AbortSignal,
-    model?: string
+    _model?: string,
+    cwd?: string,
+    permissions: AgentPermissions = 'read-only'
   ): Promise<void> {
     await this.ensureInitialized()
+
+    const resolvedCwd = cwd || process.cwd()
+    const existingSession = this.sessions.get(sessionId)
+    if (
+      existingSession &&
+      (existingSession.cwd !== resolvedCwd || existingSession.permissions !== permissions)
+    ) {
+      if (existingSession.turnId) {
+        throw new Error('Codex session is already processing a turn.')
+      }
+      this.removeSession(sessionId)
+    }
 
     const latestUserMessage = [...messages].reverse().find((message) => message.role === 'user')
     if (!latestUserMessage) {
@@ -170,7 +231,7 @@ class CodexAppServerClient {
       tempImages.push(await writeDataUrlToTempFile(latestImageDataUrl))
     }
 
-    const threadId = await this.ensureThread(sessionId)
+    const threadId = await this.ensureThread(sessionId, resolvedCwd, permissions)
     const session = this.sessions.get(sessionId)
     if (!session) {
       await cleanupTempImages(tempImages)
@@ -185,13 +246,15 @@ class CodexAppServerClient {
     session.callbacks = callbacks
     session.accumulatedText = ''
     session.tempImages = tempImages
+    session.currentItemId = null
+    session.completedItemCount = 0
 
     const inputs: Array<{ type: string; text?: string; path?: string }> = []
     const text = getTextContent(latestUserMessage.content)
     if (text) {
       inputs.push({
         type: 'text',
-        text: `${SYSTEM_PROMPT}\n\nUser:\n${text}`,
+        text: `${getCodexSystemPrompt()}\n\nUser:\n${text}`,
       })
     }
 
@@ -207,18 +270,15 @@ class CodexAppServerClient {
       throw new Error('Nothing to send to Codex.')
     }
 
-    const turnModel = model || resolveBackendModel()
+    const sandboxPolicy = buildCodexSandboxPolicy(permissions, resolvedCwd)
+
+    const approvalPolicy = permissions === 'read-only' ? 'never' : 'on-request'
 
     const turnResponse = (await this.request('turn/start', {
       threadId,
-      cwd: process.cwd(),
-      approvalPolicy: 'never',
-      model: turnModel,
-      sandboxPolicy: {
-        type: 'readOnly',
-        access: { type: 'fullAccess' },
-        networkAccess: false,
-      },
+      cwd: resolvedCwd,
+      approvalPolicy,
+      sandboxPolicy,
       input: inputs,
     })) as { turn?: { id?: string } }
 
@@ -322,6 +382,13 @@ class CodexAppServerClient {
     })
   }
 
+  /** Write a JSON-RPC response back to the server for a server-initiated request */
+  private respondToServerRequest(requestId: number, result: unknown): void {
+    if (!this.child) return
+    const payload = { jsonrpc: '2.0', id: requestId, result }
+    this.child.stdin.write(`${JSON.stringify(payload)}\n`)
+  }
+
   private handleLine(line: string): void {
     let message: Record<string, unknown>
     try {
@@ -330,11 +397,27 @@ class CodexAppServerClient {
       return
     }
 
-    if (typeof message.id === 'number') {
-      const pending = this.pending.get(message.id)
+    const hasId = typeof message.id === 'number'
+    const method = typeof message.method === 'string' ? message.method : ''
+
+    // Diagnostic: log every JSON-RPC message from the app-server
+    if (method) {
+      console.log(`[OmniCue][JSONRPC] method=${method} hasId=${hasId} keys=${Object.keys(message).join(',')}`)
+    }
+
+    // Server request: has both id and method — the server is asking US for a response
+    if (hasId && method) {
+      console.log(`[OmniCue] Codex server request: method=${method}, id=${message.id}`)
+      this.handleServerRequest(message.id as number, method, (message.params as Record<string, unknown>) || {})
+      return
+    }
+
+    // Client response: has id but no method — response to a request we sent
+    if (hasId) {
+      const pending = this.pending.get(message.id as number)
       if (!pending) return
 
-      this.pending.delete(message.id)
+      this.pending.delete(message.id as number)
       if ('error' in message && message.error) {
         pending.reject(new Error(this.extractRpcError(message.error)))
       } else {
@@ -343,8 +426,29 @@ class CodexAppServerClient {
       return
     }
 
-    const method = typeof message.method === 'string' ? message.method : ''
+    // Notification: has method but no id
     const params = (message.params as Record<string, unknown> | undefined) || {}
+
+    // New assistant item started — detect multi-item turns
+    if (method === 'item/started') {
+      const turnId = typeof params.turnId === 'string' ? params.turnId : ''
+      const item = (params.item as Record<string, unknown> | undefined) || {}
+      if (item.type !== 'agentMessage') return
+
+      const session = this.findSessionByTurnId(turnId)
+      if (!session) return
+
+      const itemId = typeof item.id === 'string' ? item.id : null
+
+      // If this is not the first assistant item, insert a separator
+      if (session.completedItemCount > 0 && session.accumulatedText) {
+        session.accumulatedText += '\n\n'
+        session.callbacks?.onToken('\n\n')
+      }
+
+      session.currentItemId = itemId
+      return
+    }
 
     if (method === 'item/agentMessage/delta') {
       const turnId = typeof params.turnId === 'string' ? params.turnId : ''
@@ -357,6 +461,7 @@ class CodexAppServerClient {
       return
     }
 
+    // Item completed — do NOT call onFinish(), just catch up on missed deltas
     if (method === 'item/completed') {
       const turnId = typeof params.turnId === 'string' ? params.turnId : ''
       const item = (params.item as Record<string, unknown> | undefined) || {}
@@ -365,15 +470,20 @@ class CodexAppServerClient {
       const session = this.findSessionByTurnId(turnId)
       if (!session) return
 
-      const text = typeof item.text === 'string' ? item.text : session.accumulatedText
-      if (!session.accumulatedText && text) {
-        session.callbacks?.onToken(text)
+      // If we missed the deltas for this item, catch up with the item's final text
+      const itemText = typeof item.text === 'string' ? item.text : ''
+      if (itemText && !session.accumulatedText) {
+        session.accumulatedText = itemText
+        session.callbacks?.onToken(itemText)
       }
-      session.callbacks?.onFinish(text)
-      void this.resetSessionTurnByTurnId(turnId)
+
+      session.completedItemCount++
+      session.currentItemId = null
+      // Do NOT call onFinish() — wait for turn/completed
       return
     }
 
+    // Turn completed — finalize the visible response exactly once
     if (method === 'turn/completed') {
       const turn = (params.turn as Record<string, unknown> | undefined) || {}
       const turnId = typeof turn.id === 'string' ? turn.id : ''
@@ -387,11 +497,19 @@ class CodexAppServerClient {
           typeof error.message === 'string' ? error.message : 'Codex turn failed.'
         session.callbacks?.onError(messageText)
         void this.resetSessionTurnByTurnId(turnId)
+        return
       }
 
       if (status === 'interrupted') {
+        // Don't call onFinish() for interrupted turns — the UI already stopped locally
         void this.resetSessionTurnByTurnId(turnId)
+        return
       }
+
+      // completed or any other status — finalize with accumulated text
+      // Always call onFinish() even if text is empty, so the UI exits streaming state
+      session.callbacks?.onFinish(session.accumulatedText || '')
+      void this.resetSessionTurnByTurnId(turnId)
       return
     }
 
@@ -408,22 +526,90 @@ class CodexAppServerClient {
     }
   }
 
+  /** Handle a JSON-RPC server request (both id and method present) */
+  private handleServerRequest(requestId: number, method: string, params: Record<string, unknown>): void {
+    const getStringParam = (...keys: string[]): string => {
+      for (const key of keys) {
+        if (typeof params[key] === 'string') return params[key] as string
+      }
+      return ''
+    }
+
+    const turnId = getStringParam('turnId', 'turn_id')
+    const threadId = getStringParam('threadId', 'thread_id')
+
+    let session = turnId ? this.findSessionByTurnId(turnId) : null
+    if (!session && threadId) {
+      session =
+        [...this.sessions.values()].find((candidate) => candidate.threadId === threadId) || null
+    }
+
+    const sessionId = session
+      ? [...this.sessions.entries()].find(([, s]) => s === session)?.[0] || ''
+      : ''
+
+    // Normalize the request into a generic interaction
+    let interaction: import('./agent-interactions').AgentInteractionRequest
+
+    const COMMAND_APPROVAL_METHODS = [
+      'item/commandExecution/requestApproval',
+      'execCommandApproval',
+    ]
+    const FILE_CHANGE_METHODS = [
+      'item/fileChange/requestApproval',
+      'applyPatchApproval',
+    ]
+    const USER_INPUT_METHODS = [
+      'item/tool/requestUserInput',
+      'mcpServer/elicitation/request',
+    ]
+
+    if (COMMAND_APPROVAL_METHODS.includes(method)) {
+      interaction = normalizeCodexCommandApproval(sessionId, String(requestId), method, params)
+    } else if (FILE_CHANGE_METHODS.includes(method)) {
+      interaction = normalizeCodexFileChangeApproval(sessionId, String(requestId), method, params)
+    } else if (USER_INPUT_METHODS.includes(method)) {
+      interaction = normalizeCodexUserInput(sessionId, String(requestId), method, params)
+    } else {
+      // Unknown server request — show as unsupported but still allow cancel
+      console.log(`[OmniCue] Unrecognized Codex server request: ${method}`)
+      interaction = normalizeCodexUnsupported(sessionId, String(requestId), method, params)
+    }
+
+    // Register so we can respond later when the user acts
+    registerPendingRequest(interaction, (result) => {
+      this.respondToServerRequest(requestId, result)
+    })
+
+    // Emit to the renderer
+    console.log(`[OmniCue] Interaction normalized: kind=${interaction.kind}, sessionId=${sessionId}, hasCallback=${!!session?.callbacks?.onInteractionRequest}, options=${interaction.options?.length || 0}, questions=${interaction.questions?.length || 0}`)
+    if (session?.callbacks?.onInteractionRequest) {
+      session.callbacks.onInteractionRequest(interaction)
+    } else {
+      console.warn(`[OmniCue] No interaction callback for session — request will be lost!`)
+    }
+  }
+
   private extractRpcError(error: unknown): string {
     if (!error || typeof error !== 'object') return 'Codex app server request failed.'
     const maybeMessage = (error as Record<string, unknown>).message
     return typeof maybeMessage === 'string' ? maybeMessage : 'Codex app server request failed.'
   }
 
-  private async ensureThread(sessionId: string): Promise<string> {
+  private async ensureThread(
+    sessionId: string,
+    cwd: string,
+    permissions: AgentPermissions = 'read-only'
+  ): Promise<string> {
     const existing = this.sessions.get(sessionId)
     if (existing) return existing.threadId
 
-    const threadModel = resolveBackendModel()
+    const threadApprovalPolicy = permissions === 'read-only' ? 'never' : 'on-request'
     const response = (await this.request('thread/start', {
-      cwd: process.cwd(),
-      approvalPolicy: 'never',
-      sandbox: 'read-only',
-      model: threadModel,
+      cwd,
+      approvalPolicy: threadApprovalPolicy,
+      sandbox: CODEX_SANDBOX_MAP[permissions],
+      developerInstructions: CODEX_INTERACTION_INSTRUCTIONS,
       ephemeral: true,
     })) as { thread?: { id?: string } }
 
@@ -438,6 +624,10 @@ class CodexAppServerClient {
       callbacks: null,
       accumulatedText: '',
       tempImages: [],
+      cwd,
+      permissions,
+      currentItemId: null,
+      completedItemCount: 0,
     })
 
     return threadId
@@ -459,6 +649,8 @@ class CodexAppServerClient {
     session.callbacks = null
     session.accumulatedText = ''
     session.tempImages = []
+    session.currentItemId = null
+    session.completedItemCount = 0
     await cleanupTempImages(images)
   }
 
@@ -525,7 +717,49 @@ export async function cleanupAllTempImages(): Promise<void> {
   } catch { /* best effort */ }
 }
 
-function getCodexCliCommand(model: string, images: PreparedImage[]): { command: string; args: string[] } {
+const CODEX_SANDBOX_MAP: Record<AgentPermissions, string> = {
+  'read-only': 'read-only',
+  'workspace-write': 'workspace-write',
+  'full-access': 'danger-full-access',
+}
+
+function buildCodexSandboxPolicy(
+  permissions: AgentPermissions,
+  cwd: string
+):
+  | { type: 'dangerFullAccess' }
+  | { type: 'readOnly'; access: { type: 'fullAccess' }; networkAccess: boolean }
+  | {
+      type: 'workspaceWrite'
+      writableRoots: string[]
+      readOnlyAccess: { type: 'fullAccess' }
+      networkAccess: boolean
+      excludeTmpdirEnvVar: boolean
+      excludeSlashTmp: boolean
+    } {
+  if (permissions === 'full-access') {
+    return { type: 'dangerFullAccess' }
+  }
+
+  if (permissions === 'workspace-write') {
+    return {
+      type: 'workspaceWrite',
+      writableRoots: [cwd],
+      readOnlyAccess: { type: 'fullAccess' },
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    }
+  }
+
+  return {
+    type: 'readOnly',
+    access: { type: 'fullAccess' },
+    networkAccess: false,
+  }
+}
+
+function getCodexCliCommand(images: PreparedImage[], permissions: AgentPermissions = 'read-only', model?: string): { command: string; args: string[] } {
   const baseArgs = [
     'exec',
     '--json',
@@ -533,10 +767,12 @@ function getCodexCliCommand(model: string, images: PreparedImage[]): { command: 
     'never',
     '--skip-git-repo-check',
     '--sandbox',
-    'read-only',
-    '--model',
-    model,
+    CODEX_SANDBOX_MAP[permissions],
   ]
+
+  if (model) {
+    baseArgs.push('--model', model)
+  }
 
   for (const image of images) {
     baseArgs.push('--image', image.path)
@@ -563,10 +799,11 @@ async function streamViaCodexCliFallback(
   messages: ChatMessage[],
   callbacks: AiStreamCallbacks,
   abortSignal?: AbortSignal,
-  modelOverride?: string
+  modelOverride?: string,
+  cwd?: string,
+  permissions: AgentPermissions = 'read-only'
 ): Promise<void> {
-  const model = modelOverride || resolveBackendModel()
-  const prompt = buildCodexPrompt(messages)
+  const prompt = buildNonInteractivePrompt(messages)
   const latestImageDataUrl = [...messages]
     .reverse()
     .map((message) => getImageDataUrl(message.content))
@@ -577,10 +814,10 @@ async function streamViaCodexCliFallback(
     tempImages.push(await writeDataUrlToTempFile(latestImageDataUrl))
   }
 
-  const { command, args } = getCodexCliCommand(model, tempImages)
+  const { command, args } = getCodexCliCommand(tempImages, permissions, modelOverride)
 
   const child = spawn(command, args, {
-    cwd: process.cwd(),
+    cwd: cwd || process.cwd(),
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -617,7 +854,11 @@ async function streamViaCodexCliFallback(
         }
 
         if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
-          finalText = event.item.text || ''
+          const itemText = event.item.text || ''
+          if (itemText) {
+            if (finalText) finalText += '\n\n'
+            finalText += itemText
+          }
         }
       } catch {
         // Ignore malformed non-event lines.
@@ -670,7 +911,8 @@ async function streamViaOpenAiApi(
   messages: ChatMessage[],
   callbacks: AiStreamCallbacks,
   abortSignal?: AbortSignal,
-  modelOverride?: string
+  modelOverride?: string,
+  cwd?: string
 ): Promise<void> {
   const settings = settingsStore.get()
   const apiKey = settings.aiApiKey || ''
@@ -683,7 +925,8 @@ async function streamViaOpenAiApi(
     )
   }
 
-  const apiMessages: ChatMessage[] = [{ role: 'system', content: SYSTEM_PROMPT }, ...messages]
+  const systemContent = cwd ? `${SYSTEM_PROMPT}\n\nThe user is currently working in: ${cwd}` : SYSTEM_PROMPT
+  const apiMessages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...messages]
   const res = await fetch(`${baseURL}/chat/completions`, {
     method: 'POST',
     headers: {
@@ -794,7 +1037,8 @@ async function streamViaClaudeApi(
   messages: ChatMessage[],
   callbacks: AiStreamCallbacks,
   abortSignal?: AbortSignal,
-  modelOverride?: string
+  modelOverride?: string,
+  cwd?: string
 ): Promise<void> {
   const settings = settingsStore.get()
   const apiKey = settings.claudeApiKey || ''
@@ -814,7 +1058,7 @@ async function streamViaClaudeApi(
   const stream = await client.messages.stream({
     model,
     max_tokens: 4096,
-    system: SYSTEM_PROMPT,
+    system: cwd ? `${SYSTEM_PROMPT}\n\nThe user is currently working in: ${cwd}` : SYSTEM_PROMPT,
     messages: anthropicMessages,
   }, { signal: abortSignal ?? undefined })
 
@@ -829,13 +1073,22 @@ async function streamViaClaudeApi(
   callbacks.onFinish(fullText)
 }
 
-function getClaudeCliCommand(): { command: string; args: string[] } {
+function getClaudeCliCommand(permissions: AgentPermissions = 'read-only'): { command: string; args: string[] } {
   const baseArgs = [
     '-p',               // print mode (non-interactive)
     '--output-format', 'stream-json',
     '--verbose',
     '--include-partial-messages',
   ]
+
+  // Map permissions to Claude Code's permission-mode flag
+  if (permissions === 'full-access') {
+    baseArgs.push('--permission-mode', 'bypassPermissions')
+  } else if (permissions === 'workspace-write') {
+    baseArgs.push('--permission-mode', 'acceptEdits')
+  } else {
+    baseArgs.push('--permission-mode', 'plan')
+  }
 
   if (process.platform === 'win32') {
     return {
@@ -851,15 +1104,18 @@ async function streamViaClaudeCodeCli(
   messages: ChatMessage[],
   callbacks: AiStreamCallbacks,
   abortSignal?: AbortSignal,
-  _modelOverride?: string
+  _modelOverride?: string,
+  cwd?: string,
+  permissions: AgentPermissions = 'read-only'
 ): Promise<void> {
-  // Claude Code CLI doesn't support --image, so we pass context as text only
-  const prompt = buildCodexPrompt(messages)
+  // Claude Code CLI is running in non-interactive print mode here, so we pass
+  // screenshot context as text only and avoid promising native OmniCue pickers.
+  const prompt = buildNonInteractivePrompt(messages)
 
-  const { command, args } = getClaudeCliCommand()
+  const { command, args } = getClaudeCliCommand(permissions)
 
   const child = spawn(command, args, {
-    cwd: process.cwd(),
+    cwd: cwd || process.cwd(),
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -983,33 +1239,39 @@ async function streamViaClaudeCodeCli(
   })
 }
 
-function resolveBackendModel(modelOverride?: string): string {
-  if (modelOverride) return modelOverride
+/** Resolve a model for direct API fallback paths only (not CLI providers). */
+function resolveModelForApi(provider: string): string {
   const settings = settingsStore.get()
-  return settings.aiModel.trim() || getCodexModel() || 'gpt-5.4'
+  if (provider === 'claude') {
+    return settings.claudeModel?.trim() || 'claude-sonnet-4-6-20250514'
+  }
+  return settings.aiModel?.trim() || 'gpt-5.4'
 }
+
+export type AgentPermissions = 'read-only' | 'workspace-write' | 'full-access'
 
 export async function streamAiResponse(
   sessionId: string,
   messages: ChatMessage[],
   callbacks: AiStreamCallbacks,
   abortSignal?: AbortSignal,
-  modelOverride?: string,
-  provider?: string
+  _modelOverride?: string,
+  provider?: string,
+  cwd?: string,
+  permissions: AgentPermissions = 'read-only'
 ): Promise<void> {
   const settings = settingsStore.get()
   const resolvedProvider = provider || settings.aiProvider || 'codex'
-  const model = modelOverride || resolveBackendModel()
-  console.log(`[OmniCue] Provider: ${resolvedProvider}, Model: ${model}`)
+  console.log(`[OmniCue] Provider: ${resolvedProvider}, Permissions: ${permissions}, CWD: ${cwd}`)
 
   // Claude provider — try Claude Code CLI first (uses Max subscription), fall back to Anthropic API
   if (resolvedProvider === 'claude') {
     const claudeStatus = getClaudeStatus()
 
     if (claudeStatus.authenticated) {
-      // Tier 1: Claude Code CLI (uses Max/Pro subscription)
+      // Tier 1: Claude Code CLI (uses Max/Pro subscription) — no model override, CLI picks its own
       try {
-        await streamViaClaudeCodeCli(messages, callbacks, abortSignal, model)
+        await streamViaClaudeCodeCli(messages, callbacks, abortSignal, undefined, cwd, permissions)
         return
       } catch (cliErr) {
         const cliMsg = cliErr instanceof Error ? cliErr.message : String(cliErr)
@@ -1023,9 +1285,10 @@ export async function streamAiResponse(
       }
     }
 
-    // Tier 2: Direct Anthropic API (requires API key)
+    // Tier 2: Direct Anthropic API (requires API key) — use saved model from settings
+    const apiModel = resolveModelForApi('claude')
     try {
-      await streamViaClaudeApi(messages, callbacks, abortSignal, model)
+      await streamViaClaudeApi(messages, callbacks, abortSignal, apiModel, cwd)
     } catch (error) {
       if (abortSignal?.aborted) return
       callbacks.onError(error instanceof Error ? error.message : String(error))
@@ -1035,8 +1298,9 @@ export async function streamAiResponse(
 
   // OpenAI provider — direct API (no Codex)
   if (resolvedProvider === 'openai') {
+    const apiModel = resolveModelForApi('openai')
     try {
-      await streamViaOpenAiApi(messages, callbacks, abortSignal, model)
+      await streamViaOpenAiApi(messages, callbacks, abortSignal, apiModel, cwd)
     } catch (error) {
       if (abortSignal?.aborted) return
       callbacks.onError(error instanceof Error ? error.message : String(error))
@@ -1048,17 +1312,17 @@ export async function streamAiResponse(
   const codexStatus = getCodexStatus()
 
   if (codexStatus.authenticated) {
-    // Tier 1: Codex app-server (JSON-RPC subprocess)
+    // Tier 1: Codex app-server (JSON-RPC subprocess) — no model override, app-server picks its own
     try {
-      await codexAppServerClient.streamSession(sessionId, messages, callbacks, abortSignal, model)
+      await codexAppServerClient.streamSession(sessionId, messages, callbacks, abortSignal, undefined, cwd, permissions)
       return
     } catch (appServerErr) {
       const appMsg = appServerErr instanceof Error ? appServerErr.message : String(appServerErr)
       console.warn('[OmniCue] Codex app-server failed, trying CLI fallback:', appMsg)
 
-      // Tier 2: Codex CLI fallback
+      // Tier 2: Codex CLI fallback — no model override, uses its own default
       try {
-        await streamViaCodexCliFallback(messages, callbacks, abortSignal, model)
+        await streamViaCodexCliFallback(messages, callbacks, abortSignal, undefined, cwd, permissions)
         return
       } catch (cliErr) {
         const cliMsg = cliErr instanceof Error ? cliErr.message : String(cliErr)
@@ -1074,8 +1338,9 @@ export async function streamAiResponse(
   }
 
   // Tier 3: Direct OpenAI API (requires manual API key)
+  const apiModel = resolveModelForApi('openai')
   try {
-    await streamViaOpenAiApi(messages, callbacks, abortSignal, model)
+    await streamViaOpenAiApi(messages, callbacks, abortSignal, apiModel, cwd)
   } catch (error) {
     if (abortSignal?.aborted) return
     callbacks.onError(error instanceof Error ? error.message : String(error))

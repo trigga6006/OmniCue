@@ -1,11 +1,13 @@
-import { ipcMain, BrowserWindow, app, screen, desktopCapturer, shell } from 'electron'
+import { ipcMain, BrowserWindow, app, screen, desktopCapturer, shell, dialog } from 'electron'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 import { settingsStore, historyStore, alarmsStore, remindersStore } from './store'
 import { overlayState } from './overlayState'
 import { streamAiResponse, cleanupSession, type ChatMessage } from './ai'
-import { extractTextFromScreenshot, type ScreenType } from './ocr'
+import { resolveProjectCwd } from './resolveProjectCwd'
+import { resolvePendingRequest, cancelPendingRequestsForSession } from './agent-interactions'
+import { extractTextFromScreenshot } from './ocr'
 import { getCodexStatus } from './codex-auth'
 import { getClaudeStatus } from './claude-auth'
 
@@ -141,6 +143,12 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('get-settings', () => {
     return settingsStore.get()
+  })
+
+  ipcMain.handle('select-folder', async () => {
+    const result = await dialog.showOpenDialog({ properties: ['openDirectory'] })
+    if (result.canceled || result.filePaths.length === 0) return null
+    return result.filePaths[0]
   })
 
   ipcMain.handle('set-settings', (_event, partial: Record<string, unknown>) => {
@@ -374,13 +382,19 @@ export function registerIpcHandlers(): void {
     'ai:send-message',
     async (
       event,
-      payload: { messages: unknown[]; sessionId: string; model?: string; provider?: string }
+      payload: { messages: unknown[]; sessionId: string; provider?: string }
     ): Promise<{ ok: boolean }> => {
       const win = BrowserWindow.fromWebContents(event.sender)
       if (!win) return { ok: false }
 
       const controller = new AbortController()
       activeStreams.set(payload.sessionId, controller)
+
+      const settings = settingsStore.get()
+      const cwd = resolveProjectCwd(
+        payload.messages as ChatMessage[],
+        settings.devRootPath || ''
+      )
 
       streamAiResponse(
         payload.sessionId,
@@ -417,10 +431,16 @@ export function registerIpcHandlers(): void {
                 toolInput,
               })
           },
+          onInteractionRequest: (request) => {
+            if (!win.isDestroyed())
+              win.webContents.send('ai:interaction-request', request)
+          },
         },
         controller.signal,
-        payload.model,
-        payload.provider
+        undefined, // model — resolved by main process per provider
+        payload.provider,
+        cwd,
+        settings.agentPermissions || 'read-only'
       ).catch((err) => {
         activeStreams.delete(payload.sessionId)
         if (!win.isDestroyed())
@@ -442,7 +462,45 @@ export function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.on('ai:interaction-respond', (_event, payload: {
+    interactionId: string
+    kind: string
+    selectedOptionId?: string
+    answers?: Record<string, string[]>
+  }) => {
+    let selectedValue: unknown = payload.selectedOptionId
+    if (typeof payload.selectedOptionId === 'string') {
+      const trimmed = payload.selectedOptionId.trim()
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          selectedValue = JSON.parse(trimmed)
+        } catch {
+          selectedValue = payload.selectedOptionId
+        }
+      }
+    }
+
+    // Build the response based on kind
+    let result: unknown
+    if (payload.kind === 'command-approval' || payload.kind === 'file-change-approval') {
+      result = { decision: selectedValue || 'cancel' }
+    } else if (payload.kind === 'user-input' || payload.kind === 'provider-elicitation') {
+      result = {
+        answers: Object.fromEntries(
+          Object.entries(payload.answers || {}).map(([questionId, answers]) => [
+            questionId,
+            { answers },
+          ])
+        ),
+      }
+    } else {
+      result = { decision: selectedValue || 'cancel' }
+    }
+    resolvePendingRequest(payload.interactionId, result)
+  })
+
   ipcMain.on('ai:cleanup-session', (_event, payload: { sessionId: string }) => {
+    cancelPendingRequestsForSession(payload.sessionId)
     activeStreams.delete(payload.sessionId)
     cleanupSession(payload.sessionId)
   })

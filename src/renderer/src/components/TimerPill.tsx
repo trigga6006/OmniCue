@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react'
 import { Timer, Bell, Repeat } from 'lucide-react'
 import { useTimerStore } from '@/stores/timerStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { generateId, formatClockTime } from '@/lib/utils'
 import { parseDuration } from '@/lib/parseDuration'
 import { glassStyle } from '@/lib/glass'
@@ -111,6 +112,7 @@ export function TimerPill({
 } = {}) {
   const { setCreating, addTimer } = useTimerStore()
   const { settings } = useSettingsStore()
+  const addNotification = useNotificationStore((s) => s.add)
 
   const [mode, setMode] = useState<Mode>('timer')
   const [value, setValue] = useState(() => getInitialValue('timer', settings.defaultDuration))
@@ -222,20 +224,36 @@ export function TimerPill({
     } else if (mode === 'alarm') {
       const hh = String(Math.floor(value / 60)).padStart(2, '0')
       const mm = String(value % 60).padStart(2, '0')
+      const alarmLabel = trimmed || 'Alarm'
       window.electronAPI.setAlarm({
         id: generateId(),
-        label: trimmed || 'Alarm',
+        label: alarmLabel,
         time: `${hh}:${mm}`,
         repeat: false,
         enabled: true,
       })
+      addNotification({
+        id: generateId(),
+        title: 'Alarm set',
+        message: `${alarmLabel} at ${formatClockTime(value)}`,
+        timeout: 3000,
+        createdAt: Date.now(),
+      })
     } else {
+      const reminderLabel = trimmed || 'Reminder'
       window.electronAPI.setReminder({
         id: generateId(),
-        label: trimmed || 'Reminder',
+        label: reminderLabel,
         intervalMinutes: value,
         enabled: true,
         nextFireAt: Date.now() + value * 60_000,
+      })
+      addNotification({
+        id: generateId(),
+        title: 'Reminder set',
+        message: `${reminderLabel} every ${value >= 60 ? `${value / 60}h` : `${value}m`}`,
+        timeout: 3000,
+        createdAt: Date.now(),
       })
     }
 
@@ -245,6 +263,7 @@ export function TimerPill({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault()
+      e.stopPropagation()
       if (phase === 'drag') setPhase('label')
       else if (phase === 'editTime') confirmTimeInput()
       else handleSubmit()

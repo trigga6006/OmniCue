@@ -23,6 +23,7 @@ export interface CodexStatus {
   authenticated: boolean
   planType?: string
   model?: string
+  authMode?: string
 }
 
 function parseAuthJson(): CodexAuth | null {
@@ -143,6 +144,7 @@ export function getCodexStatus(): CodexStatus {
     authenticated: true,
     planType: planType || 'unknown',
     model: config.model,
+    authMode: auth.authMode || 'chatgpt',
   }
 }
 

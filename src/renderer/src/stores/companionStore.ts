@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { ChatMessage } from '@/lib/types'
+import type { ChatMessage, AgentInteractionRequest } from '@/lib/types'
 import { generateId } from '@/lib/utils'
 import type { PanelSizeMode } from '@/lib/constants'
 
@@ -25,12 +25,12 @@ interface CompanionState {
   viewHorizon: number
   /** Whether the user has clicked "Load earlier" to reveal all messages */
   showingAll: boolean
-  /** Current model mode */
+  /** Current model mode — used by direct API providers only */
   aiMode: 'fast' | 'auto' | 'pro'
-  /** Sticky escalation — once Auto picks Pro, stay Pro for the session */
-  sessionEscalatedToPro: boolean
   /** Current panel size — driven by response content heuristics */
   panelSizeMode: PanelSizeMode
+  /** Pending agent interaction requests */
+  pendingInteractions: AgentInteractionRequest[]
 
   toggle: () => void
   open: () => void
@@ -47,8 +47,9 @@ interface CompanionState {
   newSession: () => void
   showAll: () => void
   setAiMode: (mode: 'fast' | 'auto' | 'pro') => void
-  markSessionEscalatedToPro: () => void
   setPanelSizeMode: (mode: PanelSizeMode) => void
+  addInteractionRequest: (request: AgentInteractionRequest) => void
+  resolveInteraction: (id: string, status: AgentInteractionRequest['status']) => void
 }
 
 export const useCompanionStore = create<CompanionState>((set) => ({
@@ -62,8 +63,8 @@ export const useCompanionStore = create<CompanionState>((set) => ({
   viewHorizon: 0,
   showingAll: false,
   aiMode: 'auto',
-  sessionEscalatedToPro: false,
   panelSizeMode: 'compact' as PanelSizeMode,
+  pendingInteractions: [],
 
   toggle: () => set((s) => {
     if (s.visible) {
@@ -154,8 +155,8 @@ export const useCompanionStore = create<CompanionState>((set) => ({
         pendingScreenshot: null,
         viewHorizon: 0,
         showingAll: false,
-        sessionEscalatedToPro: false,
         panelSizeMode: 'compact' as PanelSizeMode,
+        pendingInteractions: [],
       }
     }),
   showAll: () => set({ showingAll: true }),
@@ -164,5 +165,62 @@ export const useCompanionStore = create<CompanionState>((set) => ({
     set({ aiMode: mode })
     window.electronAPI.setSettings({ aiMode: mode })
   },
-  markSessionEscalatedToPro: () => set({ sessionEscalatedToPro: true }),
+  addInteractionRequest: (request) =>
+    set((s) => {
+      const pendingInteractions = [...s.pendingInteractions, request]
+
+      if (s.streamingMessageId) {
+        return {
+          pendingInteractions,
+          messages: s.messages.map((m) =>
+            m.id === s.streamingMessageId
+              ? { ...m, interactions: [...(m.interactions || []), request] }
+              : m
+          ),
+        }
+      }
+
+      const lastAssistantIndex = [...s.messages]
+        .map((message, index) => ({ message, index }))
+        .reverse()
+        .find(({ message }) => message.role === 'assistant')?.index
+
+      if (lastAssistantIndex !== undefined) {
+        return {
+          pendingInteractions,
+          messages: s.messages.map((message, index) =>
+            index === lastAssistantIndex
+              ? { ...message, interactions: [...(message.interactions || []), request] }
+              : message
+          ),
+        }
+      }
+
+      const syntheticMessage: ChatMessage = {
+        id: generateId(),
+        role: 'assistant',
+        content: '',
+        interactions: [request],
+        createdAt: Date.now(),
+      }
+
+      return {
+        pendingInteractions,
+        messages: [...s.messages, syntheticMessage],
+      }
+    }),
+
+  resolveInteraction: (id, status) =>
+    set((s) => {
+      const update = (req: AgentInteractionRequest) =>
+        req.id === id ? { ...req, status } : req
+      return {
+        pendingInteractions: s.pendingInteractions.map(update),
+        messages: s.messages.map((m) =>
+          m.interactions
+            ? { ...m, interactions: m.interactions.map(update) }
+            : m
+        ),
+      }
+    }),
 }))

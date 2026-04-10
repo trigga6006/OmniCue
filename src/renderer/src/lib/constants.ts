@@ -11,6 +11,8 @@ export const DEFAULT_SETTINGS = {
   soundEnabled: true,
   soundVolume: 0.7,
   autoLaunch: false,
+  barPosX: null,
+  barPosY: null,
   theme: 'dark' as const,
   fullScreenAlarms: false,
   fullScreenReminders: false,
@@ -22,6 +24,8 @@ export const DEFAULT_SETTINGS = {
   aiMode: 'auto' as const,
   claudeApiKey: '',
   claudeModel: '',
+  devRootPath: '',
+  agentPermissions: 'read-only' as const,
 }
 
 export const TIMER_CIRCLE_SIZE = 48
@@ -41,7 +45,7 @@ export type PanelSizeMode = keyof typeof PANEL_SIZES
 export const PILL_H = 36
 export const PILL_PADDING = 4
 export const PILL_ICON_SIZE = 28
-export const PILL_DIVIDER_W = 17 // 1px line + 8px padding each side
-export const PILL_TIMER_SLOT = 36
+export const PILL_DIVIDER_W = 9 // 1px line + 4px padding each side
+export const PILL_TIMER_SLOT = 30
 export const PILL_NOTIF_COLLAPSED = 36
 export const PILL_NOTIF_EXPANDED = 260

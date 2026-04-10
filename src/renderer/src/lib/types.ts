@@ -11,6 +11,8 @@ export interface ChatMessage {
   content: string
   /** Tool calls made during this assistant message */
   toolUses?: ToolUseEntry[]
+  /** Agent interaction requests (approvals, user-input, etc.) */
+  interactions?: AgentInteractionRequest[]
   /** Auto-captured screenshot (hidden from UI, always sent as context) */
   screenshot?: string
   screenshotTitle?: string
@@ -44,11 +46,74 @@ export interface HistoryEntry {
 
 export type AiProvider = 'codex' | 'claude' | 'openai'
 
+// ── Agent Interaction Types ──────────────────────────────────────────────────
+
+export type AgentInteractionKind =
+  | 'command-approval'
+  | 'file-change-approval'
+  | 'user-input'
+  | 'provider-elicitation'
+  | 'unsupported'
+
+export type AgentInteractionStatus =
+  | 'pending'
+  | 'submitted'
+  | 'resolved'
+  | 'declined'
+  | 'cancelled'
+  | 'failed'
+
+export interface AgentInteractionOption {
+  id: string
+  label: string
+  description?: string
+  value: string
+  style?: 'primary' | 'secondary' | 'danger'
+}
+
+export interface AgentInteractionQuestion {
+  id: string
+  header: string
+  question: string
+  isOther?: boolean
+  isSecret?: boolean
+  options?: AgentInteractionOption[]
+}
+
+export interface AgentInteractionRequest {
+  id: string
+  providerRequestId: string
+  provider: 'codex' | 'claude'
+  sessionId: string
+  turnId?: string
+  kind: AgentInteractionKind
+  title: string
+  description?: string
+  detail?: string
+  options?: AgentInteractionOption[]
+  questions?: AgentInteractionQuestion[]
+  requestedAt: number
+  status: AgentInteractionStatus
+  rawMethod: string
+}
+
+export interface AgentInteractionResponse {
+  sessionId: string
+  interactionId: string
+  providerRequestId: string
+  kind: AgentInteractionKind
+  selectedOptionId?: string
+  answers?: Record<string, string[]>
+}
+export type AgentPermissions = 'read-only' | 'workspace-write' | 'full-access'
+
 export interface Settings {
   defaultDuration: number
   soundEnabled: boolean
   soundVolume: number
   autoLaunch: boolean
+  barPosX: number | null
+  barPosY: number | null
   theme: 'light' | 'dark'
   fullScreenAlarms: boolean
   fullScreenReminders: boolean
@@ -60,6 +125,8 @@ export interface Settings {
   aiMode: 'fast' | 'auto' | 'pro'
   claudeApiKey: string
   claudeModel: string
+  devRootPath: string
+  agentPermissions: AgentPermissions
 }
 
 export interface AppNotification {
@@ -125,16 +192,19 @@ export interface ElectronAPI {
   sendTestAlert: () => void
   captureActiveWindow: () => Promise<{ image: string; title: string; ocrId: number } | null>
   getOcrResult: (ocrId: number) => Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>
-  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; model?: string; provider?: string }) => Promise<{ ok: boolean }>
+  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; provider?: string }) => Promise<{ ok: boolean }>
   abortAiStream: (sessionId: string) => void
   cleanupAiSession: (sessionId: string) => void
   onAiStreamToken: (cb: (data: { sessionId: string; token: string }) => void) => () => void
   onAiStreamDone: (cb: (data: { sessionId: string; fullText: string }) => void) => () => void
   onAiStreamError: (cb: (data: { sessionId: string; error: string }) => void) => () => void
   onAiToolUse: (cb: (data: { sessionId: string; toolName: string; toolInput: string }) => void) => () => void
+  onAiInteractionRequest: (cb: (data: AgentInteractionRequest) => void) => () => void
+  respondToAiInteraction: (response: AgentInteractionResponse) => void
   onToggleCompanion: (cb: () => void) => () => void
-  getCodexStatus: () => Promise<{ authenticated: boolean; planType?: string; model?: string }>
+  getCodexStatus: () => Promise<{ authenticated: boolean; planType?: string; model?: string; authMode?: string }>
   getClaudeStatus: () => Promise<{ authenticated: boolean; planType?: string }>
+  selectFolder: () => Promise<string | null>
   openExternalUrl: (url: string) => Promise<boolean>
 }
 

@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useMemo, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import { MessageSquarePlus, X, ChevronUp } from 'lucide-react'
+import { MessageSquarePlus, X, ChevronUp, Maximize2, Minimize2 } from 'lucide-react'
 import { glassCompanionStyle } from '@/lib/glass'
 import { useCompanionStore } from '@/stores/companionStore'
 import { CompanionMessage } from './CompanionMessage'
@@ -8,11 +8,10 @@ import { CompanionInput } from './CompanionInput'
 import { ScreenshotChip } from './ScreenshotChip'
 import oiLogo from '@/assets/oi-logo.svg'
 import { ScreenshotLightbox } from './ScreenshotLightbox'
-import { ModelPicker } from './ModelPicker'
+import { ProviderBadge } from './ProviderBadge'
 import { QuickActions } from './QuickActions'
-import { PANEL_SIZES, type PanelSizeMode } from '@/lib/constants'
-import { resolvePanelSize } from '@/lib/resolvePanelSize'
-import { Minimize2 } from 'lucide-react'
+import { PANEL_SIZES } from '@/lib/constants'
+import { preferLargerPanelSize, resolvePanelSize } from '@/lib/resolvePanelSize'
 
 interface CompanionPanelProps {
   visible: boolean
@@ -20,8 +19,6 @@ interface CompanionPanelProps {
   anchorX: number
   anchorY: number
 }
-
-const transition = { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const }
 
 export const CompanionPanel = memo(function CompanionPanel({
   visible,
@@ -57,6 +54,14 @@ export const CompanionPanel = memo(function CompanionPanel({
     setExpandedScreenshot({ image, title })
   }, [])
 
+  const growPanelForContent = useCallback((content: string) => {
+    const state = useCompanionStore.getState()
+    const nextSize = preferLargerPanelSize(state.panelSizeMode, resolvePanelSize(content))
+    if (nextSize !== state.panelSizeMode) {
+      state.setPanelSizeMode(nextSize)
+    }
+  }, [])
+
   // Wire up AI stream listeners
   useEffect(() => {
     if (!visible) return
@@ -66,17 +71,18 @@ export const CompanionPanel = memo(function CompanionPanel({
     const unsubToken = window.electronAPI.onAiStreamToken((data) => {
       if (data.sessionId === store().sessionId) {
         store().appendToken(data.token)
+        const state = store()
+        const streamingMessage = state.messages.find((message) => message.id === state.streamingMessageId)
+        if (streamingMessage?.content) {
+          growPanelForContent(streamingMessage.content)
+        }
       }
     })
 
     const unsubDone = window.electronAPI.onAiStreamDone((data) => {
       if (data.sessionId === store().sessionId) {
         store().finishStreaming(data.fullText)
-        // Heuristic resize based on response content
-        const newSize = resolvePanelSize(data.fullText)
-        if (newSize !== store().panelSizeMode) {
-          store().setPanelSizeMode(newSize)
-        }
+        growPanelForContent(data.fullText)
       }
     })
 
@@ -92,13 +98,20 @@ export const CompanionPanel = memo(function CompanionPanel({
       }
     })
 
+    const unsubInteraction = window.electronAPI.onAiInteractionRequest((data) => {
+      if (data.sessionId === store().sessionId) {
+        store().addInteractionRequest(data)
+      }
+    })
+
     return () => {
       unsubToken()
       unsubDone()
       unsubError()
       unsubTool()
+      unsubInteraction()
     }
-  }, [visible, sessionId])
+  }, [growPanelForContent, visible, sessionId])
 
   useEffect(() => {
     if (!visible) {
@@ -147,8 +160,19 @@ export const CompanionPanel = memo(function CompanionPanel({
                   OmniCue
                 </span>
               </div>
-              <ModelPicker />
+              <ProviderBadge />
               <div className="flex items-center gap-1">
+                {panelSizeMode !== 'large' && (
+                  <button
+                    onClick={() => useCompanionStore.getState().setPanelSizeMode('large')}
+                    className="w-6 h-6 flex items-center justify-center rounded-md
+                      text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]
+                      transition-colors cursor-pointer"
+                    title="Expand panel"
+                  >
+                    <Maximize2 size={14} />
+                  </button>
+                )}
                 {panelSizeMode !== 'compact' && (
                   <button
                     onClick={() => useCompanionStore.getState().setPanelSizeMode('compact')}
@@ -189,7 +213,7 @@ export const CompanionPanel = memo(function CompanionPanel({
               transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
             >
               {visibleMessages.length === 0 && !hasEarlier ? (
-                <QuickActions />
+                <div className="flex-1" />
               ) : (
                 <>
                   {hasEarlier && !showingAll && (
@@ -227,6 +251,9 @@ export const CompanionPanel = memo(function CompanionPanel({
                 />
               </div>
             )}
+
+            {/* Quick actions — show above input when no messages */}
+            {visibleMessages.length === 0 && !hasEarlier && <QuickActions />}
 
             {/* Input */}
             <div className="border-t border-[var(--g-line)]">

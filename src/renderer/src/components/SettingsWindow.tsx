@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import {
   Clock, Settings, Trash2, X, CheckCircle2, AlertCircle,
-  Bell, Repeat, Timer, Plus, Pencil, Sparkles
+  Bell, Repeat, Timer, Plus, Pencil, Sparkles, FolderOpen, ChevronDown
 } from 'lucide-react'
 import claudeLogo from '@/assets/claude-logo.svg'
 import codexLogo from '@/assets/codex-logo.svg'
@@ -170,6 +170,27 @@ function SettingsTab({
             checked={settings.theme === 'dark'}
             onChange={(v) => update({ theme: v ? 'dark' : 'light' })}
           />
+        </Row>
+        <Row label="Dev folder">
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-white/40 truncate max-w-[140px]" title={settings.devRootPath || 'Not set'}>
+              {settings.devRootPath
+                ? settings.devRootPath.split(/[/\\]/).slice(-2).join('/')
+                : 'Not set'}
+            </span>
+            <button
+              onClick={async () => {
+                const folder = await window.electronAPI.selectFolder()
+                if (folder) update({ devRootPath: folder })
+              }}
+              className="p-1.5 rounded-md
+                bg-white/[0.08] text-white/60 hover:bg-white/[0.14] hover:text-white/90
+                border border-white/[0.08] transition-colors duration-150 cursor-pointer outline-none"
+              title="Browse"
+            >
+              <FolderOpen size={12} />
+            </button>
+          </div>
         </Row>
       </Section>
 
@@ -611,17 +632,24 @@ function ReminderForm({
         </div>
         <div className="flex-1">
           <label className="text-[11px] text-white/35 uppercase tracking-wider mb-1.5 block">Interval</label>
-          <select
-            value={intervalMinutes}
-            onChange={(e) => setIntervalMinutes(Number(e.target.value))}
-            className="w-full bg-white/[0.06] rounded-lg px-3 py-2
-              text-[13px] text-white/80 border border-white/[0.08] outline-none
-              focus:border-white/[0.2] transition-colors cursor-pointer appearance-none"
-          >
-            {INTERVAL_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+          <div className="relative">
+            <select
+              value={intervalMinutes}
+              onChange={(e) => setIntervalMinutes(Number(e.target.value))}
+              className="w-full bg-white/[0.06] rounded-lg px-3 py-2 pr-8
+                text-[13px] text-white/80 border border-white/[0.08] outline-none
+                focus:border-white/[0.2] transition-colors cursor-pointer appearance-none
+                [&>option]:bg-[#1f1f1f] [&>option]:text-white"
+            >
+              {INTERVAL_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <ChevronDown
+              size={14}
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/35"
+            />
+          </div>
         </div>
       </div>
       <div className="flex justify-end gap-2">
@@ -783,6 +811,7 @@ function AiTab({
     authenticated: boolean
     planType?: string
     model?: string
+    authMode?: string
   } | null>(null)
 
   const provider = settings.aiProvider || 'codex'
@@ -796,6 +825,13 @@ function AiTab({
     { key: 'claude' as const, label: 'Claude', desc: 'Anthropic Claude API' },
     { key: 'openai' as const, label: 'OpenAI', desc: 'Direct OpenAI API' },
   ]
+
+  const codexAuthLabel =
+    codexStatus?.authMode === 'chatgpt'
+      ? 'ChatGPT OAuth'
+      : codexStatus?.authMode
+        ? codexStatus.authMode
+        : 'OAuth'
 
   return (
     <div className="p-6 space-y-6">
@@ -822,10 +858,22 @@ function AiTab({
         {provider === 'codex' && (
           <>
             <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
-              Uses your local Codex CLI login.
-              {codexStatus?.authenticated
-                ? ` Signed in${codexStatus.planType ? ` (${codexStatus.planType})` : ''}${codexStatus.model ? ` using ${codexStatus.model}` : ''}.`
-                : ' Run `codex login` in a terminal to enable it.'}
+              {codexStatus?.authenticated ? (
+                <>
+                  <span className="text-green-400/80">Codex CLI authenticated</span>
+                  {` via ${codexAuthLabel}`}
+                  {codexStatus.planType ? ` (${codexStatus.planType})` : ''}.
+                  {codexStatus.model ? ` Default model: ${codexStatus.model}.` : ''}
+                  {' '}Your local Codex login will be used automatically.
+                  The API key below is an optional fallback if Codex CLI is unavailable.
+                </>
+              ) : (
+                <>
+                  Codex CLI not detected. Run{' '}
+                  <span className="text-white/50 font-mono">codex login</span>{' '}
+                  in a terminal to authenticate with OpenAI OAuth, or add an API key below.
+                </>
+              )}
             </div>
             <Row label="OpenAI API Key">
               <input
@@ -908,6 +956,41 @@ function AiTab({
             </Row>
           </>
         )}
+      </Section>
+
+      <Section title="Agent Permissions">
+        <Row label="Permission mode">
+          <div className="relative">
+            <select
+              value={settings.agentPermissions || 'read-only'}
+              onChange={(e) => update({ agentPermissions: e.target.value as 'read-only' | 'workspace-write' | 'full-access' })}
+              className="bg-white/[0.06] rounded-lg px-3 py-1.5 pr-8
+                text-[13px] text-white/80 border border-white/[0.08] outline-none
+                focus:border-white/[0.2] transition-colors cursor-pointer appearance-none
+                [&>option]:bg-[#1f1f1f] [&>option]:text-white"
+            >
+              <option value="read-only">Read-only</option>
+              <option value="workspace-write">Workspace-write</option>
+              <option value="full-access">Full-access</option>
+            </select>
+            <ChevronDown
+              size={14}
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/35"
+            />
+          </div>
+        </Row>
+        <div className="px-4 pb-3 text-[11px] text-white/30 leading-relaxed">
+          {settings.agentPermissions === 'full-access'
+            ? 'Agents can inspect and edit any reachable local files. Use with care.'
+            : settings.agentPermissions === 'workspace-write'
+              ? 'Agents can inspect files and edit within the resolved working area.'
+              : 'Agents can inspect files but cannot modify them.'}
+        </div>
+        <div className="px-4 pb-3 space-y-1 text-[10px] text-white/20">
+          {provider === 'codex' && <p>Codex honors this setting directly via sandbox policy.</p>}
+          {provider === 'claude' && <p>Claude Code uses permission-mode flag; enforcement is best-effort.</p>}
+          {provider === 'openai' && <p>API providers have no local filesystem access.</p>}
+        </div>
       </Section>
     </div>
   )

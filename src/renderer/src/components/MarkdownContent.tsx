@@ -53,14 +53,14 @@ function handleLinkClick(e: React.MouseEvent<HTMLAnchorElement>, href: string) {
 
 export const MarkdownContent = memo(function MarkdownContent({ content }: MarkdownContentProps) {
   return (
-    <div className="markdown-content text-[13px] leading-relaxed">
+    <div className="markdown-content min-w-0 max-w-full overflow-hidden text-[13px] leading-relaxed break-words [overflow-wrap:anywhere]">
       <ReactMarkdown
         rehypePlugins={[[rehypeHighlight, { detect: true }]]}
         components={{
           pre({ children }) {
             const text = extractText(children)
             return (
-              <div className="group relative my-2 rounded-lg overflow-hidden
+              <div className="group relative my-2 max-w-full rounded-lg overflow-hidden
                 bg-[var(--g-bg-subtle)] border-[0.5px] border-[var(--g-line-faint)]">
                 <pre className="overflow-x-auto p-3 text-[12px] leading-[1.5] font-mono m-0">
                   {children}
@@ -78,7 +78,8 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: Markdo
               return (
                 <code
                   className="bg-[var(--g-bg-active)] px-[5px] py-[1px] rounded-[4px] text-[12px] font-mono
-                    inline whitespace-nowrap"
+                    break-words whitespace-pre-wrap [overflow-wrap:anywhere]
+                    [box-decoration-break:clone] [-webkit-box-decoration-break:clone]"
                   {...props}
                 >
                   {children}
@@ -97,7 +98,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: Markdo
                 href={href || '#'}
                 onClick={(e) => handleLinkClick(e, href || '')}
                 className="text-[var(--g-text-bright)] underline underline-offset-2
-                  hover:opacity-80 transition-opacity cursor-pointer"
+                  hover:opacity-80 transition-opacity cursor-pointer break-words [overflow-wrap:anywhere]"
               >
                 {children}
               </a>

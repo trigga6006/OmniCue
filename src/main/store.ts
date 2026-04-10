@@ -32,6 +32,8 @@ interface SettingsData {
   soundEnabled: boolean
   soundVolume: number
   autoLaunch: boolean
+  barPosX: number | null
+  barPosY: number | null
   theme: 'light' | 'dark'
   fullScreenAlarms: boolean
   fullScreenReminders: boolean
@@ -43,6 +45,8 @@ interface SettingsData {
   aiMode: 'fast' | 'auto' | 'pro'
   claudeApiKey: string
   claudeModel: string
+  devRootPath: string
+  agentPermissions: 'read-only' | 'workspace-write' | 'full-access'
 }
 
 const SETTINGS_DEFAULTS: SettingsData = {
@@ -50,6 +54,8 @@ const SETTINGS_DEFAULTS: SettingsData = {
   soundEnabled: true,
   soundVolume: 0.7,
   autoLaunch: false,
+  barPosX: null,
+  barPosY: null,
   theme: 'dark',
   fullScreenAlarms: false,
   fullScreenReminders: false,
@@ -61,6 +67,8 @@ const SETTINGS_DEFAULTS: SettingsData = {
   aiMode: 'auto',
   claudeApiKey: '',
   claudeModel: '',
+  devRootPath: '',
+  agentPermissions: 'read-only',
 }
 
 export const settingsStore = {

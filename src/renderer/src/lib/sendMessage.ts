@@ -1,5 +1,4 @@
 import { useCompanionStore } from '@/stores/companionStore'
-import { resolveModel, isProModel } from '@/lib/modelRouter'
 import { generateId } from '@/lib/utils'
 import type { ChatMessage, AiProvider } from '@/lib/types'
 
@@ -56,30 +55,27 @@ export async function sendCompanionMessage(text: string): Promise<void> {
 
     if (contentParts.length > 0 && m.role === 'user') {
       contentParts.push({ type: 'text', text: userText })
-      return { role: m.role, content: contentParts }
+      return {
+        role: m.role,
+        content: contentParts,
+        ocrText: m.ocrText,
+        screenshotTitle: m.screenshotTitle,
+        manualScreenshotTitle: m.manualScreenshotTitle,
+      }
     }
 
-    return { role: m.role, content: m.content }
+    return {
+      role: m.role,
+      content: m.content,
+      ocrText: m.ocrText,
+      screenshotTitle: m.screenshotTitle,
+      manualScreenshotTitle: m.manualScreenshotTitle,
+    }
   })
 
   // Get provider from settings (cached in store or fetched)
   const settings = await window.electronAPI.getSettings()
   const provider: AiProvider = settings.aiProvider || 'codex'
-
-  const resolvedModel = resolveModel({
-    mode: store.aiMode,
-    provider,
-    userText: text,
-    ocrText: store.autoScreenshot?.ocrText,
-    screenType: store.autoScreenshot?.screenType,
-    hasManualScreenshot: !!manual,
-    messageCount: updatedMessages.length,
-    sessionEscalatedToPro: store.sessionEscalatedToPro,
-  })
-
-  if (store.aiMode === 'auto' && isProModel(resolvedModel)) {
-    store.markSessionEscalatedToPro()
-  }
 
   const streamMsgId = generateId()
   store.startStreaming(streamMsgId)
@@ -87,7 +83,6 @@ export async function sendCompanionMessage(text: string): Promise<void> {
   window.electronAPI.sendAiMessage({
     messages: coreMessages,
     sessionId: store.sessionId,
-    model: resolvedModel,
     provider,
   })
 }

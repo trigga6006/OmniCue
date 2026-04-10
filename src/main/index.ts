@@ -107,6 +107,7 @@ function openSettingsWindow(tab?: string): void {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1a1a1a',
     resizable: true,
+    resizeHandleSize: 4,
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

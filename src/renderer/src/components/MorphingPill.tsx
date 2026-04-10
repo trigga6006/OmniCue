@@ -67,7 +67,7 @@ export const MorphingPill = memo(function MorphingPill({
 
     if (timers.length > 0) {
       w += PILL_DIVIDER_W
-      w += timers.length * PILL_TIMER_SLOT + (timers.length - 1) * 4
+      w += timers.length * PILL_TIMER_SLOT + (timers.length - 1) * 2
     }
 
     if (notifications.length > 0) {
@@ -157,7 +157,7 @@ export const MorphingPill = memo(function MorphingPill({
         </AnimatePresence>
 
         {/* Content row */}
-        <div className="absolute inset-0 flex items-center justify-between overflow-visible" style={{ padding: `0 ${PILL_PADDING}px` }}>
+        <div className="absolute inset-0 flex items-center overflow-visible" style={{ padding: `0 ${PILL_PADDING}px` }}>
           {isCreating ? (
             /* Timer creation mode: plus icon + bare TimerPill */
             <>
@@ -169,48 +169,45 @@ export const MorphingPill = memo(function MorphingPill({
               />
             </>
           ) : (
-            /* Normal mode: plus | divider | AI/close  (timers/notifs inserted in middle) */
+            /* Normal mode: plus | divider | timers | divider | AI/close — flat flex row */
             <>
-              {/* Left zone: plus + timers + notifications */}
-              <div className="flex items-center">
-                <PlusIcon onContextMenu={onContextMenu} />
+              <PlusIcon onContextMenu={onContextMenu} />
 
-                {/* Timer circles */}
-                {timers.length > 0 && <PillDivider />}
-                <AnimatePresence>
-                  {timers.map((timer, idx) => (
-                    <motion.div
-                      key={timer.id}
-                      className="flex items-center"
-                      initial={{ width: 0, opacity: 0 }}
-                      animate={{ width: PILL_TIMER_SLOT, opacity: 1, marginLeft: idx === 0 ? 0 : 4 }}
-                      exit={{ width: 0, opacity: 0 }}
-                      transition={tweenTransition}
-                    >
-                      <TimerCircleContent timer={timer} onContextMenu={onContextMenu} />
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
+              {/* Timer circles */}
+              {timers.length > 0 && <PillDivider />}
+              <AnimatePresence>
+                {timers.map((timer, idx) => (
+                  <motion.div
+                    key={timer.id}
+                    className="flex items-center justify-center"
+                    initial={{ width: 0, opacity: 0 }}
+                    animate={{ width: PILL_TIMER_SLOT, opacity: 1, marginLeft: idx === 0 ? 0 : 2 }}
+                    exit={{ width: 0, opacity: 0 }}
+                    transition={tweenTransition}
+                  >
+                    <TimerCircleContent timer={timer} onContextMenu={onContextMenu} />
+                  </motion.div>
+                ))}
+              </AnimatePresence>
 
-                {/* Notifications */}
-                {notifications.length > 0 && <PillDivider />}
-                <AnimatePresence>
-                  {notifications.map((n) => (
-                    <motion.div
-                      key={n.id}
-                      className="flex items-center"
-                      initial={{ width: 0, opacity: 0 }}
-                      animate={{ width: 'auto', opacity: 1 }}
-                      exit={{ width: 0, opacity: 0 }}
-                      transition={tweenTransition}
-                    >
-                      <NotificationContent notification={n} onContextMenu={onContextMenu} />
-                    </motion.div>
-                  ))}
-                </AnimatePresence>
-              </div>
+              {/* Notifications */}
+              {notifications.length > 0 && <PillDivider />}
+              <AnimatePresence>
+                {notifications.map((n) => (
+                  <motion.div
+                    key={n.id}
+                    className="flex items-center"
+                    initial={{ width: 0, opacity: 0 }}
+                    animate={{ width: 'auto', opacity: 1 }}
+                    exit={{ width: 0, opacity: 0 }}
+                    transition={tweenTransition}
+                  >
+                    <NotificationContent notification={n} onContextMenu={onContextMenu} />
+                  </motion.div>
+                ))}
+              </AnimatePresence>
 
-              {/* Center divider */}
+              {/* Divider before AI icon */}
               <PillDivider />
 
               {/* AI icon or close button */}
@@ -224,6 +221,7 @@ export const MorphingPill = memo(function MorphingPill({
                   whileHover={{ scale: 1.05 }}
                   whileTap={{ scale: 0.97 }}
                   onClick={() => useCompanionStore.getState().close()}
+                  onContextMenu={onContextMenu}
                 >
                   <X size={14} strokeWidth={2.5} />
                 </motion.button>
@@ -251,7 +249,7 @@ const NotificationGlow = memo(function NotificationGlow({
   // Calculate the left offset where notifications start inside the pill
   let left = PILL_PADDING + PILL_ICON_SIZE // plus icon
   if (timers.length > 0) {
-    left += PILL_DIVIDER_W + timers.length * PILL_TIMER_SLOT + (timers.length - 1) * 4
+    left += PILL_DIVIDER_W + timers.length * PILL_TIMER_SLOT + (timers.length - 1) * 2
   }
   left += PILL_DIVIDER_W // divider before notifications
 

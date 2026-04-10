@@ -53,7 +53,7 @@ export function ContextMenu({
     <AnimatePresence>
       {visible && (
           <motion.div
-            className="fixed z-50 min-w-[136px] p-1 rounded-[14px] backdrop-blur-2xl backdrop-saturate-[1.8]
+            className="fixed z-[60] min-w-[136px] p-1 rounded-[14px] backdrop-blur-2xl backdrop-saturate-[1.8]
               bg-[var(--g-bg-hover)] border-[0.5px] border-[var(--g-line)] pointer-events-auto"
             style={{
               left: Math.min(x, window.innerWidth - 160),

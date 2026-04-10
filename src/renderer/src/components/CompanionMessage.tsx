@@ -4,6 +4,7 @@ import { Terminal, FileText, Search, Code, Globe } from 'lucide-react'
 import type { ChatMessage, ToolUseEntry } from '@/lib/types'
 import oiLogoGlass from '@/assets/oi-logo-glass.svg'
 import { MarkdownContent } from './MarkdownContent'
+import { InteractionCard } from './InteractionCard'
 
 interface CompanionMessageProps {
   message: ChatMessage
@@ -19,8 +20,9 @@ export const CompanionMessage = memo(function CompanionMessage({
   const isUser = message.role === 'user'
   const screenshot = message.manualScreenshot
   const screenshotTitle = message.manualScreenshotTitle || 'Screenshot'
+  const hasVisibleInteractions = Boolean(message.interactions && message.interactions.length > 0)
 
-  const isThinking = isStreaming && !message.content
+  const isThinking = isStreaming && !message.content && !hasVisibleInteractions
   const isStopped = !isUser && message.content === 'Stopped.'
 
   // Thinking state — spinning logo with glow pulse
@@ -66,7 +68,7 @@ export const CompanionMessage = memo(function CompanionMessage({
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-2`}>
       <div
-        className={`max-w-[85%] px-3 py-2 rounded-2xl text-[13px] leading-relaxed ${
+        className={`min-w-0 max-w-[85%] overflow-hidden px-3 py-2 rounded-2xl text-[13px] leading-relaxed ${
           isUser
             ? 'bg-[var(--g-bg-active)] text-[var(--g-text-bright)]'
             : 'bg-[var(--g-bg)] text-[var(--g-text-primary)]'
@@ -94,8 +96,16 @@ export const CompanionMessage = memo(function CompanionMessage({
             ))}
           </div>
         )}
+        {/* Agent interaction cards (approvals, user-input, etc.) */}
+        {!isUser && message.interactions && message.interactions.length > 0 && (
+          <div className="flex flex-col gap-1.5 mb-1.5">
+            {message.interactions.map((interaction) => (
+              <InteractionCard key={interaction.id} interaction={interaction} />
+            ))}
+          </div>
+        )}
         {isUser ? (
-          <div className="whitespace-pre-wrap break-words">{message.content}</div>
+          <div className="min-w-0 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{message.content}</div>
         ) : isStopped ? (
           <div className="italic text-[var(--g-text-secondary)]">Stopped.</div>
         ) : (

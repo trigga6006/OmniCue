@@ -9,7 +9,7 @@ interface CompanionInputProps {
 
 export const CompanionInput = memo(function CompanionInput({ onClose }: CompanionInputProps) {
   const [text, setText] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
   const isStreaming = useCompanionStore((s) => s.isStreaming)
   const sessionId = useCompanionStore((s) => s.sessionId)
 
@@ -68,7 +68,7 @@ export const CompanionInput = memo(function CompanionInput({ onClose }: Companio
       </button>
 
       <textarea
-        ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+        ref={inputRef}
         value={text}
         onChange={(e) => {
           setText(e.target.value)

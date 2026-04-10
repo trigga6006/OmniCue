@@ -91,7 +91,6 @@ const electronAPI = {
   sendAiMessage: (payload: {
     messages: unknown[]
     sessionId: string
-    model?: string
     provider?: string
   }): Promise<{ ok: boolean }> => ipcRenderer.invoke('ai:send-message', payload),
   abortAiStream: (sessionId: string): void => {
@@ -134,15 +133,24 @@ const electronAPI = {
     ipcRenderer.on('ai:tool-use', handler)
     return () => ipcRenderer.removeListener('ai:tool-use', handler)
   },
+  onAiInteractionRequest: (callback: (data: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('ai:interaction-request', handler)
+    return () => ipcRenderer.removeListener('ai:interaction-request', handler)
+  },
+  respondToAiInteraction: (payload: unknown): void => {
+    ipcRenderer.send('ai:interaction-respond', payload)
+  },
   onToggleCompanion: (callback: () => void): (() => void) => {
     const handler = (): void => callback()
     ipcRenderer.on('toggle-companion', handler)
     return () => ipcRenderer.removeListener('toggle-companion', handler)
   },
-  getCodexStatus: (): Promise<{ authenticated: boolean; planType?: string; model?: string }> =>
+  getCodexStatus: (): Promise<{ authenticated: boolean; planType?: string; model?: string; authMode?: string }> =>
     ipcRenderer.invoke('get-codex-status'),
   getClaudeStatus: (): Promise<{ authenticated: boolean; planType?: string }> =>
     ipcRenderer.invoke('get-claude-status'),
+  selectFolder: (): Promise<string | null> => ipcRenderer.invoke('select-folder'),
   openExternalUrl: (url: string): Promise<boolean> =>
     ipcRenderer.invoke('open-external-url', url),
 }
