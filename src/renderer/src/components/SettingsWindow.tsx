@@ -822,8 +822,17 @@ function AiTab({
 
   const providerOptions = [
     { key: 'codex' as const, label: 'Codex', desc: 'OpenAI Codex CLI' },
-    { key: 'claude' as const, label: 'Claude', desc: 'Anthropic Claude API' },
-    { key: 'openai' as const, label: 'OpenAI', desc: 'Direct OpenAI API' },
+    { key: 'claude' as const, label: 'Claude', desc: 'Anthropic Claude' },
+    { key: 'opencode' as const, label: 'OpenCode', desc: 'Multi-model agent' },
+    { key: 'kimicode' as const, label: 'Kimi Code', desc: 'Moonshot agent' },
+    { key: 'openai' as const, label: 'OpenAI', desc: 'Direct API' },
+    { key: 'gemini' as const, label: 'Gemini', desc: 'Google AI' },
+    { key: 'deepseek' as const, label: 'DeepSeek', desc: 'DeepSeek API' },
+    { key: 'groq' as const, label: 'Groq', desc: 'Ultra-fast inference' },
+    { key: 'mistral' as const, label: 'Mistral', desc: 'Mistral AI' },
+    { key: 'xai' as const, label: 'Grok', desc: 'xAI Grok' },
+    { key: 'glm' as const, label: 'GLM', desc: 'Zhipu AI' },
+    { key: 'kimi' as const, label: 'Kimi', desc: 'Moonshot AI' },
   ]
 
   const codexAuthLabel =
@@ -837,19 +846,19 @@ function AiTab({
     <div className="p-6 space-y-6">
       <Section title="AI Provider">
         <div className="px-4 py-3">
-          <div className="flex gap-2">
+          <div className="grid grid-cols-5 gap-1.5">
             {providerOptions.map((p) => (
               <button
                 key={p.key}
                 onClick={() => update({ aiProvider: p.key })}
-                className={`flex-1 px-3 py-2 rounded-lg text-center transition-all cursor-pointer border ${
+                className={`px-2 py-1.5 rounded-lg text-center transition-all cursor-pointer border ${
                   provider === p.key
                     ? 'bg-white/[0.1] border-white/[0.2] text-white/90'
                     : 'bg-white/[0.03] border-white/[0.06] text-white/40 hover:bg-white/[0.06] hover:text-white/60'
                 }`}
               >
-                <div className="text-[13px] font-medium">{p.label}</div>
-                <div className="text-[10px] mt-0.5 opacity-60">{p.desc}</div>
+                <div className="text-[12px] font-medium">{p.label}</div>
+                <div className="text-[9px] mt-0.5 opacity-60 truncate">{p.desc}</div>
               </button>
             ))}
           </div>
@@ -915,6 +924,61 @@ function AiTab({
           <ClaudeSettings settings={settings} update={update} />
         )}
 
+        {provider === 'opencode' && (
+          <>
+            <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+              OpenCode is a multi-model coding agent CLI. Install with{' '}
+              <span className="text-white/50 font-mono">npm i -g opencode-ai</span>.
+              {' '}Set any API key below to use any model as a coding agent.
+            </div>
+            <Row label="API Key">
+              <input
+                type="password"
+                value={settings.opencodeApiKey}
+                onChange={(e) => update({ opencodeApiKey: e.target.value })}
+                placeholder="Any provider API key"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Model">
+              <input
+                type="text"
+                value={settings.opencodeModel}
+                onChange={(e) => update({ opencodeModel: e.target.value })}
+                placeholder="e.g. anthropic/claude-sonnet-4-6"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+          </>
+        )}
+
+        {provider === 'kimicode' && (
+          <>
+            <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+              Kimi Code is Moonshot AI's coding agent CLI. Install with{' '}
+              <span className="text-white/50 font-mono">pip install kimi-cli</span>{' '}
+              or run{' '}
+              <span className="text-white/50 font-mono">kimi login</span>{' '}
+              to authenticate. Falls back to Kimi API if CLI is unavailable.
+            </div>
+            <Row label="API Key (optional)">
+              <input
+                type="password"
+                value={settings.kimiApiKey}
+                onChange={(e) => update({ kimiApiKey: e.target.value })}
+                placeholder="Uses kimi login if empty"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+          </>
+        )}
+
         {provider === 'openai' && (
           <>
             <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
@@ -956,6 +1020,90 @@ function AiTab({
             </Row>
           </>
         )}
+
+        {provider === 'gemini' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Google Gemini API. Get your API key from"
+            linkText="aistudio.google.com"
+            apiKeyField="geminiApiKey"
+            modelField="geminiModel"
+            modelPlaceholder="gemini-3.1-pro"
+          />
+        )}
+
+        {provider === 'deepseek' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="DeepSeek API with reasoning models. Get your API key from"
+            linkText="platform.deepseek.com"
+            apiKeyField="deepseekApiKey"
+            modelField="deepseekModel"
+            modelPlaceholder="deepseek-chat"
+          />
+        )}
+
+        {provider === 'groq' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Groq ultra-fast inference. Get your API key from"
+            linkText="console.groq.com"
+            apiKeyField="groqApiKey"
+            modelField="groqModel"
+            modelPlaceholder="meta-llama/llama-4-scout-17b-16e-instruct"
+          />
+        )}
+
+        {provider === 'mistral' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Mistral AI API. Get your API key from"
+            linkText="console.mistral.ai"
+            apiKeyField="mistralApiKey"
+            modelField="mistralModel"
+            modelPlaceholder="mistral-large-latest"
+          />
+        )}
+
+        {provider === 'xai' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="xAI Grok API. Get your API key from"
+            linkText="console.x.ai"
+            apiKeyField="xaiApiKey"
+            modelField="xaiModel"
+            modelPlaceholder="grok-4"
+          />
+        )}
+
+        {provider === 'glm' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Zhipu AI GLM API. Get your API key from"
+            linkText="open.bigmodel.cn"
+            apiKeyField="glmApiKey"
+            modelField="glmModel"
+            modelPlaceholder="glm-5.1"
+          />
+        )}
+
+        {provider === 'kimi' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Moonshot Kimi API. Get your API key from"
+            linkText="platform.moonshot.ai"
+            apiKeyField="kimiApiKey"
+            modelField="kimiModel"
+            modelPlaceholder="kimi-k2.5"
+          />
+        )}
       </Section>
 
       <Section title="Agent Permissions">
@@ -989,7 +1137,11 @@ function AiTab({
         <div className="px-4 pb-3 space-y-1 text-[10px] text-white/20">
           {provider === 'codex' && <p>Codex honors this setting directly via sandbox policy.</p>}
           {provider === 'claude' && <p>Claude Code uses permission-mode flag; enforcement is best-effort.</p>}
-          {provider === 'openai' && <p>API providers have no local filesystem access.</p>}
+          {provider === 'opencode' && <p>OpenCode uses its own permission system; configure via opencode.json.</p>}
+          {provider === 'kimicode' && <p>Kimi Code manages permissions internally.</p>}
+          {provider !== 'codex' && provider !== 'claude' && provider !== 'opencode' && provider !== 'kimicode' && (
+            <p>API providers have no local filesystem access.</p>
+          )}
         </div>
       </Section>
     </div>
@@ -1047,6 +1199,55 @@ function ClaudeSettings({
           value={settings.claudeModel}
           onChange={(e) => update({ claudeModel: e.target.value })}
           placeholder="Leave empty for auto"
+          className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+            text-[13px] text-white/80 border border-white/[0.08] outline-none
+            focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+        />
+      </Row>
+    </>
+  )
+}
+
+function CompatProviderSettings({
+  settings,
+  update,
+  description,
+  linkText,
+  apiKeyField,
+  modelField,
+  modelPlaceholder,
+}: {
+  settings: ReturnType<typeof useSettingsStore.getState>['settings']
+  update: ReturnType<typeof useSettingsStore.getState>['update']
+  description: string
+  linkText: string
+  apiKeyField: keyof typeof settings
+  modelField: keyof typeof settings
+  modelPlaceholder: string
+}) {
+  return (
+    <>
+      <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+        {description}{' '}
+        <span className="text-white/50">{linkText}</span>.
+      </div>
+      <Row label="API Key">
+        <input
+          type="password"
+          value={(settings[apiKeyField] as string) || ''}
+          onChange={(e) => update({ [apiKeyField]: e.target.value })}
+          placeholder="Enter API key"
+          className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+            text-[13px] text-white/80 border border-white/[0.08] outline-none
+            focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+        />
+      </Row>
+      <Row label="Model">
+        <input
+          type="text"
+          value={(settings[modelField] as string) || ''}
+          onChange={(e) => update({ [modelField]: e.target.value })}
+          placeholder={modelPlaceholder}
           className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
             text-[13px] text-white/80 border border-white/[0.08] outline-none
             focus:border-white/[0.2] transition-colors placeholder:text-white/20"

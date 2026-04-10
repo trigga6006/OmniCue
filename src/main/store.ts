@@ -38,13 +38,29 @@ interface SettingsData {
   fullScreenAlarms: boolean
   fullScreenReminders: boolean
   fullScreenClaude: boolean
-  aiProvider: 'codex' | 'claude' | 'openai'
+  aiProvider: 'codex' | 'claude' | 'opencode' | 'kimicode' | 'openai' | 'gemini' | 'deepseek' | 'groq' | 'mistral' | 'xai' | 'glm' | 'kimi'
   aiApiKey: string
   aiBaseUrl: string
   aiModel: string
   aiMode: 'fast' | 'auto' | 'pro'
   claudeApiKey: string
   claudeModel: string
+  geminiApiKey: string
+  geminiModel: string
+  deepseekApiKey: string
+  deepseekModel: string
+  groqApiKey: string
+  groqModel: string
+  mistralApiKey: string
+  mistralModel: string
+  xaiApiKey: string
+  xaiModel: string
+  glmApiKey: string
+  glmModel: string
+  kimiApiKey: string
+  kimiModel: string
+  opencodeApiKey: string
+  opencodeModel: string
   devRootPath: string
   agentPermissions: 'read-only' | 'workspace-write' | 'full-access'
 }
@@ -67,6 +83,22 @@ const SETTINGS_DEFAULTS: SettingsData = {
   aiMode: 'auto',
   claudeApiKey: '',
   claudeModel: '',
+  geminiApiKey: '',
+  geminiModel: '',
+  deepseekApiKey: '',
+  deepseekModel: '',
+  groqApiKey: '',
+  groqModel: '',
+  mistralApiKey: '',
+  mistralModel: '',
+  xaiApiKey: '',
+  xaiModel: '',
+  glmApiKey: '',
+  glmModel: '',
+  kimiApiKey: '',
+  kimiModel: '',
+  opencodeApiKey: '',
+  opencodeModel: '',
   devRootPath: '',
   agentPermissions: 'read-only',
 }
@@ -172,5 +204,60 @@ export const remindersStore = {
   delete(id: string): void {
     const reminders = this.getAll().filter((r) => r.id !== id)
     writeJson('reminders.json', { reminders })
+  },
+}
+
+// ─── Watchers ────────────────────────────────────────────────────────────────
+
+export type WatcherType = 'file-exists' | 'folder-change' | 'process-exit'
+
+export interface Watcher {
+  id: string
+  label: string
+  type: WatcherType
+  target: string          // file path, folder path, or process name
+  status: 'active' | 'completed'
+  createdAt: number       // epoch ms
+  completedAt?: number    // epoch ms
+}
+
+interface WatchersData {
+  watchers: Watcher[]
+}
+
+export const watchersStore = {
+  getAll(): Watcher[] {
+    return readJson<WatchersData>('watchers.json', { watchers: [] }).watchers
+  },
+  set(watcher: Watcher): void {
+    const watchers = this.getAll()
+    const idx = watchers.findIndex((w) => w.id === watcher.id)
+    if (idx >= 0) watchers[idx] = watcher
+    else watchers.push(watcher)
+    writeJson('watchers.json', { watchers })
+  },
+  complete(id: string): void {
+    const watchers = this.getAll()
+    const idx = watchers.findIndex((w) => w.id === id)
+    if (idx >= 0) {
+      watchers[idx].status = 'completed'
+      watchers[idx].completedAt = Date.now()
+    }
+    // Prune old completed watchers — keep at most 50
+    const completed = watchers.filter((w) => w.status === 'completed')
+    if (completed.length > 50) {
+      const toRemove = new Set(
+        completed.sort((a, b) => (a.completedAt || 0) - (b.completedAt || 0))
+          .slice(0, completed.length - 50)
+          .map((w) => w.id)
+      )
+      writeJson('watchers.json', { watchers: watchers.filter((w) => !toRemove.has(w.id)) })
+    } else {
+      writeJson('watchers.json', { watchers })
+    }
+  },
+  delete(id: string): void {
+    const watchers = this.getAll().filter((w) => w.id !== id)
+    writeJson('watchers.json', { watchers })
   },
 }

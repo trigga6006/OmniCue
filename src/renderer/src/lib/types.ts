@@ -21,6 +21,10 @@ export interface ChatMessage {
   /** Manual screenshot via photo button (shown in UI) */
   manualScreenshot?: string
   manualScreenshotTitle?: string
+  /** Structured desktop context */
+  activeApp?: string
+  processName?: string
+  clipboardText?: string
   createdAt: number
 }
 
@@ -44,7 +48,7 @@ export interface HistoryEntry {
   type?: EntryType
 }
 
-export type AiProvider = 'codex' | 'claude' | 'openai'
+export type AiProvider = 'codex' | 'claude' | 'opencode' | 'kimicode' | 'openai' | 'gemini' | 'deepseek' | 'groq' | 'mistral' | 'xai' | 'glm' | 'kimi'
 
 // ── Agent Interaction Types ──────────────────────────────────────────────────
 
@@ -107,6 +111,28 @@ export interface AgentInteractionResponse {
 }
 export type AgentPermissions = 'read-only' | 'workspace-write' | 'full-access'
 
+// ── Watcher Types ────────────────────────────────────────────────────────────
+
+export type WatcherType = 'file-exists' | 'folder-change' | 'process-exit'
+
+export interface WatcherConfig {
+  id: string
+  label: string
+  type: WatcherType
+  target: string
+  status: 'active' | 'completed'
+  createdAt: number
+  completedAt?: number
+}
+
+export interface WatcherEvent {
+  id: string
+  label: string
+  type: WatcherType
+  target: string
+  detail?: string
+}
+
 export interface Settings {
   defaultDuration: number
   soundEnabled: boolean
@@ -125,6 +151,22 @@ export interface Settings {
   aiMode: 'fast' | 'auto' | 'pro'
   claudeApiKey: string
   claudeModel: string
+  geminiApiKey: string
+  geminiModel: string
+  deepseekApiKey: string
+  deepseekModel: string
+  groqApiKey: string
+  groqModel: string
+  mistralApiKey: string
+  mistralModel: string
+  xaiApiKey: string
+  xaiModel: string
+  glmApiKey: string
+  glmModel: string
+  kimiApiKey: string
+  kimiModel: string
+  opencodeApiKey: string
+  opencodeModel: string
   devRootPath: string
   agentPermissions: AgentPermissions
 }
@@ -190,7 +232,7 @@ export interface ElectronAPI {
   getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   getPrimaryDisplayBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   sendTestAlert: () => void
-  captureActiveWindow: () => Promise<{ image: string; title: string; ocrId: number } | null>
+  captureActiveWindow: () => Promise<{ image: string; title: string; activeApp: string; processName: string; clipboardText: string; ocrId: number } | null>
   getOcrResult: (ocrId: number) => Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>
   sendAiMessage: (payload: { messages: unknown[]; sessionId: string; provider?: string }) => Promise<{ ok: boolean }>
   abortAiStream: (sessionId: string) => void
@@ -206,6 +248,24 @@ export interface ElectronAPI {
   getClaudeStatus: () => Promise<{ authenticated: boolean; planType?: string }>
   selectFolder: () => Promise<string | null>
   openExternalUrl: (url: string) => Promise<boolean>
+
+  // ─── Clipboard ───────────────────────────────────────────────────────────
+  clipboardReadText: () => Promise<string>
+  clipboardWriteText: (text: string) => Promise<void>
+  clipboardReadImage: () => Promise<string | null>
+
+  // ─── OS Actions ──────────────────────────────────────────────────────────
+  osOpenPath: (filePath: string) => Promise<{ ok: boolean; error?: string }>
+  osShowInFolder: (filePath: string) => Promise<void>
+  osOpenUrl: (url: string) => Promise<{ ok: boolean; error?: string }>
+  osRunSystemCommand: (command: string) => Promise<{ ok: boolean; error?: string }>
+
+  // ─── Watchers ────────────────────────────────────────────────────────────
+  createWatcher: (watcher: WatcherConfig) => Promise<void>
+  listWatchers: () => Promise<WatcherConfig[]>
+  deleteWatcher: (id: string) => Promise<void>
+  resumeWatchers: () => Promise<void>
+  onWatcherTriggered: (cb: (data: WatcherEvent) => void) => () => void
 }
 
 declare global {

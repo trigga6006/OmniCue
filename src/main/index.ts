@@ -7,6 +7,7 @@ import { startScheduler } from './scheduler'
 import { overlayState } from './overlayState'
 import { settingsStore } from './store'
 import { cleanupAllTempImages } from './ai'
+import { cacheActiveWindow, cleanupActiveWindowScript } from './activeWindow'
 import icon from '../../resources/icon.png?asset'
 import trayIconPath from '../../resources/tray-icon.png?asset'
 
@@ -235,6 +236,8 @@ app.whenReady().then(() => {
 
   // Register global hotkey for AI companion
   globalShortcut.register('Ctrl+Shift+Space', () => {
+    // Capture active window BEFORE Electron takes focus
+    cacheActiveWindow()
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('toggle-companion')
       if (!mainWindow.isVisible()) mainWindow.show()
@@ -261,6 +264,7 @@ app.whenReady().then(() => {
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   cleanupAllTempImages().catch(() => {})
+  cleanupActiveWindowScript()
 })
 
 app.on('window-all-closed', () => {

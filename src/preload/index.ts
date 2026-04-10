@@ -84,7 +84,7 @@ const electronAPI = {
   sendTestAlert: (): void => {
     ipcRenderer.send('send-test-alert')
   },
-  captureActiveWindow: (): Promise<{ image: string; title: string; ocrId: number } | null> =>
+  captureActiveWindow: (): Promise<{ image: string; title: string; activeApp: string; processName: string; clipboardText: string; ocrId: number } | null> =>
     ipcRenderer.invoke('capture-active-window'),
   getOcrResult: (ocrId: number): Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null> =>
     ipcRenderer.invoke('get-ocr-result', ocrId),
@@ -153,6 +153,32 @@ const electronAPI = {
   selectFolder: (): Promise<string | null> => ipcRenderer.invoke('select-folder'),
   openExternalUrl: (url: string): Promise<boolean> =>
     ipcRenderer.invoke('open-external-url', url),
+
+  // ─── Clipboard ───────────────────────────────────────────────────────────
+  clipboardReadText: (): Promise<string> => ipcRenderer.invoke('clipboard:read-text'),
+  clipboardWriteText: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write-text', text),
+  clipboardReadImage: (): Promise<string | null> => ipcRenderer.invoke('clipboard:read-image'),
+
+  // ─── OS Actions ──────────────────────────────────────────────────────────
+  osOpenPath: (filePath: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('os:open-path', filePath),
+  osShowInFolder: (filePath: string): Promise<void> =>
+    ipcRenderer.invoke('os:show-in-folder', filePath),
+  osOpenUrl: (url: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('os:open-url', url),
+  osRunSystemCommand: (command: string): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke('os:run-system-command', command),
+
+  // ─── Watchers ────────────────────────────────────────────────────────────
+  createWatcher: (watcher: unknown): Promise<void> => ipcRenderer.invoke('watcher:create', watcher),
+  listWatchers: (): Promise<unknown[]> => ipcRenderer.invoke('watcher:list'),
+  deleteWatcher: (id: string): Promise<void> => ipcRenderer.invoke('watcher:delete', id),
+  resumeWatchers: (): Promise<void> => ipcRenderer.invoke('watcher:resume-all'),
+  onWatcherTriggered: (callback: (data: unknown) => void): (() => void) => {
+    const handler = (_event: unknown, data: unknown): void => callback(data)
+    ipcRenderer.on('watcher:triggered', handler)
+    return () => ipcRenderer.removeListener('watcher:triggered', handler)
+  },
 }
 
 if (process.contextIsolated) {

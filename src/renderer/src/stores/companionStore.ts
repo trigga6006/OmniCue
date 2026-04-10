@@ -6,6 +6,9 @@ import type { PanelSizeMode } from '@/lib/constants'
 interface ScreenshotData {
   image: string
   title: string
+  activeApp?: string
+  processName?: string
+  clipboardText?: string
   ocrId?: number
   ocrText?: string
   screenType?: string
@@ -42,6 +45,8 @@ interface CompanionState {
   finishStreaming: (fullText: string) => void
   streamError: (error: string) => void
   setAutoScreenshot: (s: ScreenshotData | null) => void
+  /** Set screenshot and eagerly resolve OCR in background for QuickActions */
+  captureAndResolve: (s: ScreenshotData) => void
   setPendingScreenshot: (s: ScreenshotData | null) => void
   clearMessages: () => void
   newSession: () => void
@@ -89,6 +94,10 @@ export const useCompanionStore = create<CompanionState>((set) => ({
         // Manual screenshot (visible chip) — only if user captured one
         manualScreenshot: s.pendingScreenshot?.image,
         manualScreenshotTitle: s.pendingScreenshot?.title,
+        // Structured desktop context
+        activeApp: s.autoScreenshot?.activeApp,
+        processName: s.autoScreenshot?.processName,
+        clipboardText: s.autoScreenshot?.clipboardText,
         createdAt: Date.now(),
       }
       return { messages: [...s.messages, msg], pendingScreenshot: null }
@@ -143,6 +152,19 @@ export const useCompanionStore = create<CompanionState>((set) => ({
     })),
 
   setAutoScreenshot: (s) => set({ autoScreenshot: s }),
+  captureAndResolve: (s) => {
+    // Clear stale screenType/ocrText so QuickActions doesn't flash old chips
+    set({ autoScreenshot: { ...s, screenType: undefined, ocrText: undefined } })
+    if (s.ocrId) {
+      window.electronAPI.getOcrResult(s.ocrId).then((ocr) => {
+        if (!ocr) return
+        const current = useCompanionStore.getState().autoScreenshot
+        if (current && current.ocrId === s.ocrId) {
+          set({ autoScreenshot: { ...current, ocrText: ocr.ocrText, screenType: ocr.screenType } })
+        }
+      })
+    }
+  },
   setPendingScreenshot: (s) => set({ pendingScreenshot: s }),
   clearMessages: () => set({ messages: [], viewHorizon: 0, showingAll: false }),
   newSession: () =>

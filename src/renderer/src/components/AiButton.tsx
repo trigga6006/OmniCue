@@ -9,7 +9,6 @@ import { useCompanionStore } from '@/stores/companionStore'
 /** Bare sparkles icon for use inside MorphingPill — no glass background */
 export const AiIcon = memo(function AiIcon() {
   const open = useCompanionStore((s) => s.open)
-  const setAutoScreenshot = useCompanionStore((s) => s.setAutoScreenshot)
   const visible = useCompanionStore((s) => s.visible)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -21,7 +20,7 @@ export const AiIcon = memo(function AiIcon() {
     }
     open()
     window.electronAPI.captureActiveWindow().then((result) => {
-      if (result) setAutoScreenshot(result)
+      if (result) useCompanionStore.getState().captureAndResolve(result)
     })
   }
 
@@ -98,7 +97,6 @@ export const AiIcon = memo(function AiIcon() {
 
 export const AiButton = memo(function AiButton() {
   const open = useCompanionStore((s) => s.open)
-  const setAutoScreenshot = useCompanionStore((s) => s.setAutoScreenshot)
   const visible = useCompanionStore((s) => s.visible)
 
   const handleClick = () => {
@@ -110,7 +108,7 @@ export const AiButton = memo(function AiButton() {
     // Open panel immediately — capture + OCR happen in background (invisible to user)
     open()
     window.electronAPI.captureActiveWindow().then((result) => {
-      if (result) setAutoScreenshot(result)
+      if (result) useCompanionStore.getState().captureAndResolve(result)
     })
   }
 

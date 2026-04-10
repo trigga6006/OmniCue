@@ -129,7 +129,7 @@ export default function App() {
         setShowHistory(false)
         setShowSettings(false)
         window.electronAPI.captureActiveWindow().then((result) => {
-          if (result) useCompanionStore.getState().setAutoScreenshot(result)
+          if (result) useCompanionStore.getState().captureAndResolve(result)
         })
         companion.open()
       } else {

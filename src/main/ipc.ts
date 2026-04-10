@@ -1,8 +1,9 @@
-import { ipcMain, BrowserWindow, app, screen, desktopCapturer, shell, dialog } from 'electron'
+import { ipcMain, BrowserWindow, app, screen, desktopCapturer, shell, dialog, clipboard } from 'electron'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
-import { settingsStore, historyStore, alarmsStore, remindersStore } from './store'
+import { exec, execSync } from 'child_process'
+import { settingsStore, historyStore, alarmsStore, remindersStore, watchersStore, type Watcher } from './store'
 import { overlayState } from './overlayState'
 import { streamAiResponse, cleanupSession, type ChatMessage } from './ai'
 import { resolveProjectCwd } from './resolveProjectCwd'
@@ -10,8 +11,23 @@ import { resolvePendingRequest, cancelPendingRequestsForSession } from './agent-
 import { extractTextFromScreenshot } from './ocr'
 import { getCodexStatus } from './codex-auth'
 import { getClaudeStatus } from './claude-auth'
+import { getActiveWindowCached } from './activeWindow'
 
 const activeStreams = new Map<string, AbortController>()
+
+// Safe OS commands accessible to the agent — restricted allowlist
+function openSystemSettings(win32: string, darwin: string): void {
+  if (process.platform === 'win32') exec(`start ${win32}`)
+  else if (process.platform === 'darwin') exec(`open ${darwin}`)
+}
+
+const SYSTEM_COMMANDS: Record<string, () => void> = {
+  bluetooth: () => openSystemSettings('ms-settings:bluetooth', '/System/Library/PreferencePanes/Bluetooth.prefPane'),
+  wifi: () => openSystemSettings('ms-settings:network-wifi', '/System/Library/PreferencePanes/Network.prefPane'),
+  display: () => openSystemSettings('ms-settings:display', '/System/Library/PreferencePanes/Displays.prefPane'),
+  sound: () => openSystemSettings('ms-settings:sound', '/System/Library/PreferencePanes/Sound.prefPane'),
+  downloads: () => shell.openPath(path.join(os.homedir(), 'Downloads')),
+}
 
 const MARKER_START = '<!-- OmniCue:start -->'
 const MARKER_END = '<!-- OmniCue:end -->'
@@ -100,11 +116,12 @@ export function registerIpcHandlers(): void {
     overlayState.panelOpen = open
   })
 
-  ipcMain.handle('open-external-url', (_event, url: string): boolean => {
+  // Legacy alias — delegates to os:open-url
+  ipcMain.handle('open-external-url', async (_event, url: string): Promise<boolean> => {
     try {
       const parsed = new URL(url)
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
-        shell.openExternal(url)
+        await shell.openExternal(url)
         return true
       }
     } catch { /* invalid URL */ }
@@ -334,11 +351,16 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('capture-active-window', async (): Promise<{
     image: string
     title: string
+    activeApp: string
+    processName: string
+    clipboardText: string
     ocrId: number
   } | null> => {
     try {
-      // Capture the full primary screen — more reliable than individual windows on Windows,
-      // and always shows exactly what the user sees on their desktop.
+      // Get active window info (uses cache from hotkey handler if available)
+      const winInfo = getActiveWindowCached()
+      const clipText = clipboard.readText() || ''
+
       const sources = await desktopCapturer.getSources({
         types: ['screen'],
         thumbnailSize: { width: 1920, height: 1080 },
@@ -349,10 +371,10 @@ export function registerIpcHandlers(): void {
       if (!primary) return null
 
       const image = primary.thumbnail.toDataURL()
-      const title = 'Desktop'
+      const title = winInfo?.windowTitle || 'Desktop'
       const ocrId = ++ocrCounter
 
-      // Fire OCR in background — don't block the UI
+      // Fire OCR in background with real window title for better classification
       pendingOcr.set(
         ocrId,
         extractTextFromScreenshot(image, title)
@@ -360,7 +382,14 @@ export function registerIpcHandlers(): void {
           .catch(() => null)
       )
 
-      return { image, title, ocrId }
+      return {
+        image,
+        title,
+        activeApp: winInfo?.activeApp || '',
+        processName: winInfo?.processName || '',
+        clipboardText: clipText,
+        ocrId,
+      }
     } catch {
       return null
     }
@@ -503,6 +532,179 @@ export function registerIpcHandlers(): void {
     cancelPendingRequestsForSession(payload.sessionId)
     activeStreams.delete(payload.sessionId)
     cleanupSession(payload.sessionId)
+  })
+
+  // ─── Clipboard ──────────────────────────────────────────────────────────────
+
+  ipcMain.handle('clipboard:read-text', () => clipboard.readText())
+
+  ipcMain.handle('clipboard:write-text', (_event, text: string) => {
+    clipboard.writeText(text)
+  })
+
+  ipcMain.handle('clipboard:read-image', () => {
+    const img = clipboard.readImage()
+    if (img.isEmpty()) return null
+    return img.toDataURL()
+  })
+
+  // ─── OS Actions ────────────────────────────────────────────────────────────
+
+  ipcMain.handle('os:open-path', async (_event, filePath: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const result = await shell.openPath(filePath)
+      if (result) return { ok: false, error: result }
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('os:show-in-folder', (_event, filePath: string) => {
+    shell.showItemInFolder(filePath)
+  })
+
+  ipcMain.handle('os:open-url', async (_event, url: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        await shell.openExternal(url)
+        return { ok: true }
+      }
+      return { ok: false, error: 'Only http/https URLs allowed' }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('os:run-system-command', async (_event, command: string): Promise<{ ok: boolean; error?: string }> => {
+    const handler = SYSTEM_COMMANDS[command]
+    if (!handler) return { ok: false, error: `Unknown system command: ${command}. Available: ${Object.keys(SYSTEM_COMMANDS).join(', ')}` }
+    try {
+      handler()
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  // ─── File/Process Watchers ─────────────────────────────────────────────────
+
+  const activeWatchers = new Map<string, { close: () => void }>()
+
+  function completeWatcher(watcher: Watcher, win: BrowserWindow, detail?: string): void {
+    activeWatchers.delete(watcher.id)
+    watchersStore.complete(watcher.id)
+    if (!win.isDestroyed()) {
+      win.webContents.send('watcher:triggered', {
+        id: watcher.id,
+        label: watcher.label,
+        type: watcher.type,
+        target: watcher.target,
+        detail,
+      })
+      // Also fire a desktop notification via the existing notification system
+      win.webContents.send('new-notification', {
+        id: `watcher-${watcher.id}`,
+        title: 'Watcher',
+        message: watcher.label,
+        timeout: 8000,
+        createdAt: Date.now(),
+      })
+    }
+  }
+
+  function startWatcher(watcher: Watcher, win: BrowserWindow): void {
+    if (activeWatchers.has(watcher.id)) return
+
+    switch (watcher.type) {
+      case 'file-exists': {
+        const interval = setInterval(() => {
+          if (fs.existsSync(watcher.target)) {
+            clearInterval(interval)
+            completeWatcher(watcher, win)
+          }
+        }, 2000)
+        activeWatchers.set(watcher.id, { close: () => clearInterval(interval) })
+        break
+      }
+
+      case 'folder-change': {
+        try {
+          const fsWatcher = fs.watch(watcher.target, { persistent: false }, (eventType, filename) => {
+            fsWatcher.close()
+            completeWatcher(watcher, win, `${eventType}: ${filename || 'unknown'}`)
+          })
+          activeWatchers.set(watcher.id, { close: () => fsWatcher.close() })
+        } catch {
+          const interval = setInterval(() => {
+            if (fs.existsSync(watcher.target)) {
+              clearInterval(interval)
+              completeWatcher(watcher, win)
+            }
+          }, 2000)
+          activeWatchers.set(watcher.id, { close: () => clearInterval(interval) })
+        }
+        break
+      }
+
+      case 'process-exit': {
+        const interval = setInterval(() => {
+          try {
+            if (process.platform === 'win32') {
+              const output = execSync(`tasklist /FI "IMAGENAME eq ${watcher.target}" /NH`, { encoding: 'utf-8' })
+              // tasklist returns "INFO: No tasks..." when process is missing (doesn't throw)
+              if (output.includes('INFO:') || !output.includes(watcher.target)) {
+                clearInterval(interval)
+                completeWatcher(watcher, win)
+              }
+            } else {
+              execSync(`pgrep -f "${watcher.target}"`, { encoding: 'utf-8' })
+            }
+          } catch {
+            clearInterval(interval)
+            completeWatcher(watcher, win)
+          }
+        }, 3000)
+        activeWatchers.set(watcher.id, { close: () => clearInterval(interval) })
+        break
+      }
+    }
+  }
+
+  ipcMain.handle('watcher:create', (event, watcher: Watcher) => {
+    watchersStore.set(watcher)
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (win) startWatcher(watcher, win)
+  })
+
+  ipcMain.handle('watcher:list', () => watchersStore.getAll())
+
+  ipcMain.handle('watcher:delete', (_event, id: string) => {
+    const active = activeWatchers.get(id)
+    if (active) {
+      active.close()
+      activeWatchers.delete(id)
+    }
+    watchersStore.delete(id)
+  })
+
+  // Resume any active watchers on startup
+  ipcMain.handle('watcher:resume-all', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) return
+    const watchers = watchersStore.getAll().filter((w) => w.status === 'active')
+    for (const watcher of watchers) {
+      startWatcher(watcher, win)
+    }
+  })
+
+  // Clean up all active watchers (call on app quit or window destroy)
+  app.on('will-quit', () => {
+    for (const [id, handle] of activeWatchers) {
+      handle.close()
+      activeWatchers.delete(id)
+    }
   })
 
   ipcMain.handle('sample-screen-brightness', async (): Promise<number> => {

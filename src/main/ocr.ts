@@ -29,6 +29,7 @@ export type ScreenType =
   | 'chat'
   | 'email'
   | 'code'
+  | 'terminal'
   | 'document'
   | 'dashboard'
   | 'form'
@@ -42,6 +43,22 @@ export type ScreenType =
 function classifyScreen(text: string, windowTitle: string): ScreenType {
   const lower = text.toLowerCase()
   const title = windowTitle.toLowerCase()
+
+  // Terminals
+  if (
+    title.includes('terminal') ||
+    title.includes('powershell') ||
+    title.includes('cmd.exe') ||
+    title.includes('command prompt') ||
+    title.includes('warp') ||
+    title.includes('iterm') ||
+    title.includes('windows terminal') ||
+    title.includes('alacritty') ||
+    title.includes('hyper') ||
+    /\$\s|>\s|❯|error:|failed|exit code/i.test(lower)
+  ) {
+    return 'terminal'
+  }
 
   // Code editors
   if (

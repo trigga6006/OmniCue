@@ -25,7 +25,17 @@ export interface AiStreamCallbacks {
 
 const SYSTEM_PROMPT = `You are OmniCue, a concise desktop AI companion. Be helpful, brief, and specific. Prefer bullet points and short paragraphs over walls of text. You may use Markdown formatting: bold, italic, inline code, fenced code blocks with language tags, lists, and headers. Keep formatting purposeful and avoid unnecessary decoration for simple answers.
 
-You may receive a screenshot of the user's screen and extracted text as context with each message. This context is captured automatically — the user may or may not be asking about it. Only reference the screen context if the user's question clearly relates to what's visible. For general questions unrelated to the screen, respond normally without mentioning the screenshot or screen text.`
+You may receive structured desktop context with each message inside <desktop-context> tags. This includes:
+- app: The application the user is currently working in (e.g. "Visual Studio Code", "Google Chrome")
+- process: The OS process name
+- windowTitle: The full window title (often contains the current file, project, URL, etc.)
+- screenType: Classified category — code, terminal, chat, email, article, browser, document, dashboard, form
+- clipboard: The user's current clipboard contents (truncated)
+- screenText: OCR-extracted text visible on screen
+
+You may also receive a screenshot image alongside the text context.
+
+This context is captured automatically — the user may or may not be asking about it. Use the app name and window title to give contextually aware responses (e.g. knowing which file or project the user has open). Only reference the desktop context if the user's question relates to what they're working on. For general questions, respond normally.`
 
 const CODEX_INTERACTION_INSTRUCTIONS = `OmniCue supports interactive requests from Codex.
 
@@ -907,56 +917,39 @@ async function streamViaCodexCliFallback(
   })
 }
 
-async function streamViaOpenAiApi(
-  messages: ChatMessage[],
-  callbacks: AiStreamCallbacks,
-  abortSignal?: AbortSignal,
-  modelOverride?: string,
-  cwd?: string
-): Promise<void> {
-  const settings = settingsStore.get()
-  const apiKey = settings.aiApiKey || ''
-  const model = modelOverride || settings.aiModel || 'gpt-4o'
-  const baseURL = settings.aiBaseUrl || 'https://api.openai.com/v1'
-
-  if (!apiKey) {
-    throw new Error(
-      'No AI provider configured. Sign in with Codex CLI (run "codex login") or set an OpenAI API key in Settings.'
-    )
-  }
-
+/** Shared OpenAI-compatible SSE streaming core. */
+async function streamOpenAiCompat(opts: {
+  baseURL: string
+  apiKey: string
+  model: string
+  providerLabel: string
+  authHeader?: string
+  authPrefix?: string
+}, messages: ChatMessage[], callbacks: AiStreamCallbacks, abortSignal?: AbortSignal, cwd?: string): Promise<void> {
+  const headerName = opts.authHeader || 'Authorization'
+  const prefix = opts.authPrefix || 'Bearer'
   const systemContent = cwd ? `${SYSTEM_PROMPT}\n\nThe user is currently working in: ${cwd}` : SYSTEM_PROMPT
   const apiMessages: ChatMessage[] = [{ role: 'system', content: systemContent }, ...messages]
-  const res = await fetch(`${baseURL}/chat/completions`, {
+
+  const res = await fetch(`${opts.baseURL}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
+      [headerName]: `${prefix} ${opts.apiKey}`,
     },
-    body: JSON.stringify({
-      model,
-      messages: apiMessages,
-      stream: true,
-    }),
+    body: JSON.stringify({ model: opts.model, messages: apiMessages, stream: true }),
     signal: abortSignal,
   })
 
   if (!res.ok) {
     const body = await res.text()
-    let errorMsg = `API error ${res.status}`
-    try {
-      const parsed = JSON.parse(body)
-      errorMsg = parsed.error?.message || errorMsg
-    } catch {
-      // Use the default status-based error.
-    }
+    let errorMsg = `${opts.providerLabel} API error ${res.status}`
+    try { errorMsg = JSON.parse(body).error?.message || errorMsg } catch { /* use default */ }
     throw new Error(errorMsg)
   }
 
   const reader = res.body?.getReader()
-  if (!reader) {
-    throw new Error('No response stream')
-  }
+  if (!reader) throw new Error('No response stream')
 
   const decoder = new TextDecoder()
   let fullText = ''
@@ -973,24 +966,39 @@ async function streamViaOpenAiApi(
     for (const line of lines) {
       const trimmed = line.trim()
       if (!trimmed.startsWith('data: ')) continue
-
       const data = trimmed.slice(6)
       if (data === '[DONE]') continue
-
       try {
-        const parsed = JSON.parse(data)
-        const delta = parsed.choices?.[0]?.delta?.content
+        const delta = JSON.parse(data).choices?.[0]?.delta?.content
         if (delta) {
           fullText += delta
           callbacks.onToken(delta)
         }
-      } catch {
-        // Ignore malformed SSE chunks.
-      }
+      } catch { /* ignore malformed SSE chunks */ }
     }
   }
 
   callbacks.onFinish(fullText)
+}
+
+async function streamViaOpenAiApi(
+  messages: ChatMessage[],
+  callbacks: AiStreamCallbacks,
+  abortSignal?: AbortSignal,
+  modelOverride?: string,
+  cwd?: string
+): Promise<void> {
+  const settings = settingsStore.get()
+  const apiKey = settings.aiApiKey || ''
+  if (!apiKey) {
+    throw new Error('No AI provider configured. Sign in with Codex CLI (run "codex login") or set an OpenAI API key in Settings.')
+  }
+  await streamOpenAiCompat({
+    baseURL: settings.aiBaseUrl || 'https://api.openai.com/v1',
+    apiKey,
+    model: modelOverride || settings.aiModel || 'gpt-4o',
+    providerLabel: 'OpenAI',
+  }, messages, callbacks, abortSignal, cwd)
 }
 
 /** Convert OpenAI-shaped messages to Anthropic format */
@@ -1239,11 +1247,355 @@ async function streamViaClaudeCodeCli(
   })
 }
 
+// ── OpenCode CLI Harness ─────────────────────────────────────────────────────
+
+function getOpenCodeCommand(model?: string, cwd?: string): { command: string; args: string[]; env: Record<string, string> } {
+  const settings = settingsStore.get()
+  const resolvedModel = model || settings.opencodeModel?.trim() || ''
+
+  const baseArgs = ['run', '--format', 'json']
+  if (resolvedModel) baseArgs.push('--model', resolvedModel)
+  if (cwd) baseArgs.push('--dir', cwd)
+  baseArgs.push('-') // read prompt from stdin
+
+  // Pass through any API key the user configured as env vars
+  const env: Record<string, string> = { ...process.env } as Record<string, string>
+  if (settings.opencodeApiKey?.trim()) {
+    // Set common provider env vars so OpenCode picks them up
+    env.OPENAI_API_KEY = settings.opencodeApiKey
+    env.ANTHROPIC_API_KEY = settings.opencodeApiKey
+    env.OPENCODE_OPENAI_APIKEY = settings.opencodeApiKey
+    env.OPENCODE_ANTHROPIC_APIKEY = settings.opencodeApiKey
+    env.GOOGLE_API_KEY = settings.opencodeApiKey
+    env.XAI_API_KEY = settings.opencodeApiKey
+    env.GROQ_API_KEY = settings.opencodeApiKey
+    env.DEEPSEEK_API_KEY = settings.opencodeApiKey
+  }
+
+  if (process.platform === 'win32') {
+    return {
+      command: process.env.ComSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', `opencode ${baseArgs.map(quoteForCmd).join(' ')}`],
+      env,
+    }
+  }
+
+  return { command: 'opencode', args: baseArgs, env }
+}
+
+async function streamViaOpenCodeCli(
+  messages: ChatMessage[],
+  callbacks: AiStreamCallbacks,
+  abortSignal?: AbortSignal,
+  _modelOverride?: string,
+  cwd?: string
+): Promise<void> {
+  const prompt = buildNonInteractivePrompt(messages)
+  const { command, args, env } = getOpenCodeCommand(undefined, cwd)
+
+  const child = spawn(command, args, {
+    cwd: cwd || process.cwd(),
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  })
+
+  let stdoutBuffer = ''
+  let stderrBuffer = ''
+  let fullText = ''
+
+  const handleAbort = (): void => {
+    try { child.kill() } catch { /* ignore */ }
+  }
+  abortSignal?.addEventListener('abort', handleAbort, { once: true })
+  child.stdin.end(prompt)
+
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString('utf8')
+    const lines = stdoutBuffer.split(/\r?\n/)
+    stdoutBuffer = lines.pop() || ''
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('{')) continue
+
+      try {
+        const event = JSON.parse(trimmed) as Record<string, unknown>
+        const type = event.type as string
+
+        if (type === 'text') {
+          const part = event.part as Record<string, unknown> | undefined
+          const text = part?.text as string | undefined
+          if (text) {
+            fullText += text
+            callbacks.onToken(text)
+          }
+        }
+
+        if (type === 'tool_use') {
+          const part = event.part as Record<string, unknown> | undefined
+          const toolName = part?.tool as string || 'tool'
+          const state = part?.state as Record<string, unknown> | undefined
+          const input = state?.input as Record<string, unknown> | undefined
+          const summary = (input?.command || input?.path || input?.pattern || toolName) as string
+          callbacks.onToolUse?.(toolName, summary)
+        }
+
+        if (type === 'error') {
+          const error = event.error as Record<string, unknown> | undefined
+          const data = error?.data as Record<string, unknown> | undefined
+          const msg = (data?.message || error?.name || 'OpenCode error') as string
+          callbacks.onError(msg)
+        }
+      } catch { /* ignore malformed lines */ }
+    }
+  })
+
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrBuffer += chunk.toString('utf8')
+  })
+
+  return new Promise((resolve, reject) => {
+    child.on('error', (error) => {
+      abortSignal?.removeEventListener('abort', handleAbort)
+      reject(error)
+    })
+
+    child.on('close', (code) => {
+      abortSignal?.removeEventListener('abort', handleAbort)
+      if (abortSignal?.aborted) { resolve(); return }
+
+      if (fullText) {
+        callbacks.onFinish(fullText)
+        resolve()
+        return
+      }
+
+      const stderrSummary = stderrBuffer.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join('\n')
+      reject(new Error(stderrSummary || `OpenCode exited without a response (code ${code ?? 'unknown'}).`))
+    })
+  })
+}
+
+// ── Kimi Code CLI Harness ───────────────────────────────────────────────────
+
+function getKimiCodeCommand(): { command: string; args: string[]; env: Record<string, string> } {
+  const baseArgs = ['--print', '--output-format', 'stream-json']
+
+  const env: Record<string, string> = { ...process.env } as Record<string, string>
+  const settings = settingsStore.get()
+  if (settings.kimiApiKey?.trim()) {
+    env.KIMI_API_KEY = settings.kimiApiKey
+  }
+
+  if (process.platform === 'win32') {
+    return {
+      command: process.env.ComSpec || 'cmd.exe',
+      args: ['/d', '/s', '/c', `kimi ${baseArgs.map(quoteForCmd).join(' ')}`],
+      env,
+    }
+  }
+
+  return { command: 'kimi', args: baseArgs, env }
+}
+
+async function streamViaKimiCodeCli(
+  messages: ChatMessage[],
+  callbacks: AiStreamCallbacks,
+  abortSignal?: AbortSignal,
+  _modelOverride?: string,
+  cwd?: string
+): Promise<void> {
+  const prompt = buildNonInteractivePrompt(messages)
+  const { command, args, env } = getKimiCodeCommand()
+
+  // Append the prompt via -p flag
+  args.push('-p', prompt)
+
+  const child = spawn(command, args, {
+    cwd: cwd || process.cwd(),
+    env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+    windowsHide: true,
+  })
+
+  let stdoutBuffer = ''
+  let stderrBuffer = ''
+  let fullText = ''
+
+  const handleAbort = (): void => {
+    try { child.kill() } catch { /* ignore */ }
+  }
+  abortSignal?.addEventListener('abort', handleAbort, { once: true })
+
+  child.stdout.on('data', (chunk: Buffer) => {
+    stdoutBuffer += chunk.toString('utf8')
+    const lines = stdoutBuffer.split(/\r?\n/)
+    stdoutBuffer = lines.pop() || ''
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed.startsWith('{')) continue
+
+      try {
+        const event = JSON.parse(trimmed) as Record<string, unknown>
+        const role = event.role as string | undefined
+        const content = event.content as string | undefined
+
+        // Assistant text message
+        if (role === 'assistant' && content) {
+          fullText += content
+          callbacks.onToken(content)
+        }
+
+        // Tool calls
+        const toolCalls = event.tool_calls as Array<Record<string, unknown>> | undefined
+        if (toolCalls) {
+          for (const tc of toolCalls) {
+            const fn = tc.function as Record<string, unknown> | undefined
+            if (fn) {
+              const name = (fn.name || 'tool') as string
+              let summary = name
+              try {
+                const parsed = JSON.parse(fn.arguments as string)
+                summary = parsed.command || parsed.path || parsed.pattern || name
+              } catch { /* use name */ }
+              callbacks.onToolUse?.(name, summary)
+            }
+          }
+        }
+      } catch { /* ignore malformed lines */ }
+    }
+  })
+
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderrBuffer += chunk.toString('utf8')
+  })
+
+  return new Promise((resolve, reject) => {
+    child.on('error', (error) => {
+      abortSignal?.removeEventListener('abort', handleAbort)
+      reject(error)
+    })
+
+    child.on('close', (code) => {
+      abortSignal?.removeEventListener('abort', handleAbort)
+      if (abortSignal?.aborted) { resolve(); return }
+
+      if (fullText) {
+        callbacks.onFinish(fullText)
+        resolve()
+        return
+      }
+
+      const stderrSummary = stderrBuffer.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join('\n')
+      reject(new Error(stderrSummary || `Kimi Code exited without a response (code ${code ?? 'unknown'}).`))
+    })
+  })
+}
+
+// ── Provider registry for OpenAI-compatible APIs ────────────────────────────
+
+interface CompatProviderConfig {
+  name: string
+  defaultBaseUrl: string
+  defaultModel: string
+  apiKeyField: keyof ReturnType<typeof settingsStore.get>
+  modelField: keyof ReturnType<typeof settingsStore.get>
+  /** Custom auth header name (defaults to 'Authorization') */
+  authHeader?: string
+  /** Custom auth prefix (defaults to 'Bearer') */
+  authPrefix?: string
+}
+
+const COMPAT_PROVIDERS: Record<string, CompatProviderConfig> = {
+  gemini: {
+    name: 'Google Gemini',
+    defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    defaultModel: 'gemini-3.1-pro',
+    apiKeyField: 'geminiApiKey',
+    modelField: 'geminiModel',
+  },
+  deepseek: {
+    name: 'DeepSeek',
+    defaultBaseUrl: 'https://api.deepseek.com/v1',
+    defaultModel: 'deepseek-chat',
+    apiKeyField: 'deepseekApiKey',
+    modelField: 'deepseekModel',
+  },
+  groq: {
+    name: 'Groq',
+    defaultBaseUrl: 'https://api.groq.com/openai/v1',
+    defaultModel: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    apiKeyField: 'groqApiKey',
+    modelField: 'groqModel',
+  },
+  mistral: {
+    name: 'Mistral',
+    defaultBaseUrl: 'https://api.mistral.ai/v1',
+    defaultModel: 'mistral-large-latest',
+    apiKeyField: 'mistralApiKey',
+    modelField: 'mistralModel',
+  },
+  xai: {
+    name: 'xAI Grok',
+    defaultBaseUrl: 'https://api.x.ai/v1',
+    defaultModel: 'grok-4',
+    apiKeyField: 'xaiApiKey',
+    modelField: 'xaiModel',
+  },
+  glm: {
+    name: 'GLM (Zhipu AI)',
+    defaultBaseUrl: 'https://open.bigmodel.cn/api/paas/v4',
+    defaultModel: 'glm-5.1',
+    apiKeyField: 'glmApiKey',
+    modelField: 'glmModel',
+  },
+  kimi: {
+    name: 'Kimi (Moonshot)',
+    defaultBaseUrl: 'https://api.moonshot.ai/v1',
+    defaultModel: 'kimi-k2.5',
+    apiKeyField: 'kimiApiKey',
+    modelField: 'kimiModel',
+  },
+}
+
+async function streamViaCompatProvider(
+  providerId: string,
+  messages: ChatMessage[],
+  callbacks: AiStreamCallbacks,
+  abortSignal?: AbortSignal,
+  modelOverride?: string,
+  cwd?: string
+): Promise<void> {
+  const config = COMPAT_PROVIDERS[providerId]
+  if (!config) throw new Error(`Unknown provider: ${providerId}`)
+
+  const settings = settingsStore.get()
+  const apiKey = (settings[config.apiKeyField] as string) || ''
+  if (!apiKey) {
+    throw new Error(`No API key configured for ${config.name}. Add your API key in Settings → AI Settings.`)
+  }
+
+  await streamOpenAiCompat({
+    baseURL: config.defaultBaseUrl,
+    apiKey,
+    model: modelOverride || (settings[config.modelField] as string)?.trim() || config.defaultModel,
+    providerLabel: config.name,
+    authHeader: config.authHeader,
+    authPrefix: config.authPrefix,
+  }, messages, callbacks, abortSignal, cwd)
+}
+
 /** Resolve a model for direct API fallback paths only (not CLI providers). */
 function resolveModelForApi(provider: string): string {
   const settings = settingsStore.get()
   if (provider === 'claude') {
     return settings.claudeModel?.trim() || 'claude-sonnet-4-6-20250514'
+  }
+  if (COMPAT_PROVIDERS[provider]) {
+    const config = COMPAT_PROVIDERS[provider]
+    return (settings[config.modelField] as string)?.trim() || config.defaultModel
   }
   return settings.aiModel?.trim() || 'gpt-5.4'
 }
@@ -1296,11 +1648,56 @@ export async function streamAiResponse(
     return
   }
 
+  // OpenCode harness — full coding agent CLI
+  if (resolvedProvider === 'opencode') {
+    try {
+      await streamViaOpenCodeCli(messages, callbacks, abortSignal, undefined, cwd)
+    } catch (error) {
+      if (abortSignal?.aborted) return
+      callbacks.onError(error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
+  // Kimi Code harness — full coding agent CLI, falls back to Kimi API
+  if (resolvedProvider === 'kimicode') {
+    try {
+      await streamViaKimiCodeCli(messages, callbacks, abortSignal, undefined, cwd)
+    } catch (cliErr) {
+      const cliMsg = cliErr instanceof Error ? cliErr.message : String(cliErr)
+      console.warn('[OmniCue] Kimi Code CLI failed, trying Kimi API fallback:', cliMsg)
+
+      if (!settings.kimiApiKey) {
+        callbacks.onError(`Kimi Code CLI failed: ${cliMsg}`)
+        return
+      }
+      // Fall back to Kimi API
+      try {
+        await streamViaCompatProvider('kimi', messages, callbacks, abortSignal, undefined, cwd)
+      } catch (apiErr) {
+        if (abortSignal?.aborted) return
+        callbacks.onError(apiErr instanceof Error ? apiErr.message : String(apiErr))
+      }
+    }
+    return
+  }
+
   // OpenAI provider — direct API (no Codex)
   if (resolvedProvider === 'openai') {
     const apiModel = resolveModelForApi('openai')
     try {
       await streamViaOpenAiApi(messages, callbacks, abortSignal, apiModel, cwd)
+    } catch (error) {
+      if (abortSignal?.aborted) return
+      callbacks.onError(error instanceof Error ? error.message : String(error))
+    }
+    return
+  }
+
+  // OpenAI-compatible providers (Gemini, DeepSeek, Groq, Mistral, xAI)
+  if (COMPAT_PROVIDERS[resolvedProvider]) {
+    try {
+      await streamViaCompatProvider(resolvedProvider, messages, callbacks, abortSignal, undefined, cwd)
     } catch (error) {
       if (abortSignal?.aborted) return
       callbacks.onError(error instanceof Error ? error.message : String(error))

@@ -3,6 +3,26 @@ import { generateId } from '@/lib/utils'
 import type { ChatMessage, AiProvider } from '@/lib/types'
 
 /**
+ * Build a structured desktop context block from message metadata.
+ */
+function formatDesktopContext(m: ChatMessage): string {
+  const lines: string[] = ['<desktop-context>']
+
+  if (m.activeApp) lines.push(`  app: ${m.activeApp}`)
+  if (m.processName) lines.push(`  process: ${m.processName}`)
+  if (m.screenshotTitle) lines.push(`  windowTitle: ${m.screenshotTitle}`)
+  if (m.screenType && m.screenType !== 'unknown') lines.push(`  screenType: ${m.screenType}`)
+  if (m.clipboardText) lines.push(`  clipboard: ${m.clipboardText.slice(0, 500)}`)
+  if (m.ocrText) {
+    const indented = m.ocrText.replace(/\n/g, '\n    ')
+    lines.push(`  screenText: |\n    ${indented}`)
+  }
+
+  lines.push('</desktop-context>')
+  return lines.join('\n')
+}
+
+/**
  * Shared send logic used by CompanionInput and quick actions.
  * Resolves OCR, builds messages, routes model, and fires the stream.
  */
@@ -46,11 +66,9 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     }
 
     let userText = m.content
-    if (m.role === 'user' && m.ocrText) {
-      const screenLabel = m.screenType && m.screenType !== 'unknown'
-        ? ` (${m.screenType})`
-        : ''
-      userText = `[Screen context${screenLabel} — extracted text from ${m.screenshotTitle || 'screen'}]\n${m.ocrText}\n\n[User question]\n${m.content}`
+    if (m.role === 'user' && (m.ocrText || m.activeApp)) {
+      const ctx = formatDesktopContext(m)
+      userText = `${ctx}\n\n${m.content}`
     }
 
     if (contentParts.length > 0 && m.role === 'user') {
