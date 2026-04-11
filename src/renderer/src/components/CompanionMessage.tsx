@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { motion } from 'motion/react'
 import { Terminal, FileText, Search, Code, Globe } from 'lucide-react'
 import type { ChatMessage, ToolUseEntry } from '@/lib/types'
@@ -24,6 +24,30 @@ export const CompanionMessage = memo(function CompanionMessage({
 
   const isThinking = isStreaming && !message.content && !hasVisibleInteractions
   const isStopped = !isUser && message.content === 'Stopped.'
+
+  // Detect token stall: content exists but no new tokens for STALL_MS
+  const STALL_MS = 3000
+  const contentLenRef = useRef(message.content.length)
+  const [stalled, setStalled] = useState(false)
+
+  useEffect(() => {
+    if (!isStreaming || !message.content) {
+      setStalled(false)
+      contentLenRef.current = message.content.length
+      return
+    }
+    // Content just changed — reset
+    if (message.content.length !== contentLenRef.current) {
+      contentLenRef.current = message.content.length
+      setStalled(false)
+    }
+    const timer = window.setTimeout(() => {
+      if (isStreaming && message.content.length === contentLenRef.current) {
+        setStalled(true)
+      }
+    }, STALL_MS)
+    return () => clearTimeout(timer)
+  }, [isStreaming, message.content])
 
   // Thinking state — spinning logo with glow pulse
   if (!isUser && isThinking) {
@@ -111,10 +135,42 @@ export const CompanionMessage = memo(function CompanionMessage({
         ) : (
           <MarkdownContent content={message.content} />
         )}
+        {/* Still-thinking indicator — shows after token stall while streaming */}
+        {stalled && <StallIndicator />}
       </div>
     </div>
   )
 })
+
+/** Subtle pulsing dots shown below content when the AI stalls mid-stream */
+function StallIndicator() {
+  return (
+    <motion.div
+      className="flex items-center gap-1.5 mt-2 pt-1.5 border-t border-[var(--g-line-faint)]"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.4 }}
+    >
+      <div className="flex items-center gap-[3px]">
+        {[0, 0.25, 0.5].map((delay) => (
+          <motion.span
+            key={delay}
+            className="block w-[4px] h-[4px] rounded-full bg-[var(--g-text-secondary)]"
+            animate={{ opacity: [0.3, 0.9, 0.3], scale: [0.85, 1.15, 0.85] }}
+            transition={{ duration: 1.2, repeat: Infinity, ease: 'easeInOut', delay }}
+          />
+        ))}
+      </div>
+      <motion.span
+        className="text-[11px] text-[var(--g-text-secondary)]"
+        animate={{ opacity: [0.4, 0.75, 0.4] }}
+        transition={{ duration: 2, repeat: Infinity, ease: 'easeInOut' }}
+      >
+        Still working…
+      </motion.span>
+    </motion.div>
+  )
+}
 
 const TOOL_ICONS: Record<string, typeof Terminal> = {
   Bash: Terminal,

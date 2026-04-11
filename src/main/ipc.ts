@@ -12,6 +12,14 @@ import { extractTextFromScreenshot } from './ocr'
 import { getCodexStatus } from './codex-auth'
 import { getClaudeStatus } from './claude-auth'
 import { getActiveWindowCached } from './activeWindow'
+import { getCurrentDisplayId, captureDisplayDataUrl } from './desktop-tools'
+import { executeAction, ACTION_REGISTRY } from './actions'
+import { listNotes as listWorkspaceNotes, getNote as getWorkspaceNote, deleteNote as deleteWorkspaceNote } from './workspace-notes'
+import { resolvePack } from '../shared/tool-packs/resolver'
+import {
+  listConversations, loadConversation, saveConversation,
+  deleteConversation, renameConversation,
+} from './conversations'
 
 const activeStreams = new Map<string, AbortController>()
 
@@ -99,12 +107,13 @@ function buildBlock(): string {
 }
 
 export function registerIpcHandlers(): void {
-  ipcMain.on('set-ignore-mouse-events', (event, ignore: boolean) => {
+  ipcMain.on('set-ignore-mouse-events', (event, ignore: boolean, opts?: { forward?: boolean }) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (win) {
-      win.setIgnoreMouseEvents(ignore)
+      win.setIgnoreMouseEvents(ignore, opts || {})
       overlayState.isIgnoring = ignore
-      if (ignore) overlayState.lastIgnoreTime = Date.now()
+      overlayState.isForwarding = !!(ignore && opts?.forward)
+      if (ignore && !opts?.forward) overlayState.lastIgnoreTime = Date.now()
     }
   })
 
@@ -348,47 +357,58 @@ export function registerIpcHandlers(): void {
   const pendingOcr = new Map<number, Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>>()
   let ocrCounter = 0
 
-  ipcMain.handle('capture-active-window', async (): Promise<{
+  ipcMain.handle('capture-active-window', async (event, displayId?: number): Promise<{
     image: string
     title: string
     activeApp: string
     processName: string
     clipboardText: string
     ocrId: number
+    packId?: string
+    packName?: string
+    packConfidence?: number
+    packContext?: Record<string, string>
+    packVariant?: string
   } | null> => {
     try {
-      // Get active window info (uses cache from hotkey handler if available)
-      const winInfo = getActiveWindowCached()
+      const winInfo = await getActiveWindowCached()
       const clipText = clipboard.readText() || ''
 
-      const sources = await desktopCapturer.getSources({
-        types: ['screen'],
-        thumbnailSize: { width: 1920, height: 1080 },
-        fetchWindowIcons: false,
-      })
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const capture = await captureDisplayDataUrl(displayId, win)
+      if (!capture) return null
 
-      const primary = sources[0]
-      if (!primary) return null
-
-      const image = primary.thumbnail.toDataURL()
       const title = winInfo?.windowTitle || 'Desktop'
       const ocrId = ++ocrCounter
 
-      // Fire OCR in background with real window title for better classification
       pendingOcr.set(
         ocrId,
-        extractTextFromScreenshot(image, title)
+        extractTextFromScreenshot(capture.image, title)
           .then((r) => ({ ocrText: r.text, screenType: r.screenType, ocrDurationMs: r.durationMs }))
           .catch(() => null)
       )
 
+      // Resolve tool pack from active window info
+      const pack = resolvePack({
+        activeApp: winInfo?.activeApp || '',
+        processName: winInfo?.processName || '',
+        windowTitle: title,
+      })
+
       return {
-        image,
+        image: capture.image,
         title,
         activeApp: winInfo?.activeApp || '',
         processName: winInfo?.processName || '',
         clipboardText: clipText,
         ocrId,
+        ...(pack && {
+          packId: pack.packId,
+          packName: pack.packName,
+          packConfidence: pack.confidence,
+          packContext: pack.context,
+          packVariant: pack.variant,
+        }),
       }
     } catch {
       return null
@@ -411,7 +431,7 @@ export function registerIpcHandlers(): void {
     'ai:send-message',
     async (
       event,
-      payload: { messages: unknown[]; sessionId: string; provider?: string }
+      payload: { messages: unknown[]; sessionId: string; provider?: string; resumeMode?: 'normal' | 'replay-seed' }
     ): Promise<{ ok: boolean }> => {
       const win = BrowserWindow.fromWebContents(event.sender)
       if (!win) return { ok: false }
@@ -469,7 +489,8 @@ export function registerIpcHandlers(): void {
         undefined, // model — resolved by main process per provider
         payload.provider,
         cwd,
-        settings.agentPermissions || 'read-only'
+        settings.agentPermissions || 'read-only',
+        payload.resumeMode || 'normal'
       ).catch((err) => {
         activeStreams.delete(payload.sessionId)
         if (!win.isDestroyed())
@@ -547,6 +568,43 @@ export function registerIpcHandlers(): void {
     if (img.isEmpty()) return null
     return img.toDataURL()
   })
+
+  // ─── Conversations ──────────────────────────────────────────────────────────
+
+  ipcMain.handle('conversations:list', () => listConversations())
+
+  ipcMain.handle('conversations:load', (_event, id: string) => loadConversation(id))
+
+  ipcMain.handle('conversations:save', (_event, data: {
+    id: string; title: string; provider: string; messages: Record<string, unknown>[]
+  }) => {
+    saveConversation(data)
+  })
+
+  ipcMain.handle('conversations:delete', (_event, id: string) => {
+    deleteConversation(id)
+  })
+
+  ipcMain.handle('conversations:rename', (_event, id: string, title: string) => {
+    renameConversation(id, title)
+  })
+
+  // ─── App Actions ────────────────────────────────────────────────────────────
+
+  ipcMain.handle('action:execute', async (event, request: { actionId: string; params: Record<string, unknown>; requestId?: string }) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    return executeAction(request, win)
+  })
+
+  ipcMain.handle('action:list', () => ACTION_REGISTRY)
+
+  // ─── Notes ──────────────────────────────────────────────────────────────────
+
+  ipcMain.handle('notes:list', () => listWorkspaceNotes())
+
+  ipcMain.handle('notes:get', (_event, id: string) => getWorkspaceNote(id))
+
+  ipcMain.handle('notes:delete', (_event, id: string) => deleteWorkspaceNote(id))
 
   // ─── OS Actions ────────────────────────────────────────────────────────────
 
@@ -715,9 +773,10 @@ export function registerIpcHandlers(): void {
       })
       if (sources.length === 0) return 128
 
-      // Sample from the primary display source
-      const primaryId = String(screen.getPrimaryDisplay().id)
-      const source = sources.find((s) => s.display_id === primaryId) || sources[0]
+      // Sample from the display where the overlay is (not always primary)
+      const overlay = BrowserWindow.getAllWindows().find((w) => w.isAlwaysOnTop()) || null
+      const targetDisplayId = String(getCurrentDisplayId(overlay))
+      const source = sources.find((s) => s.display_id === targetDisplayId) || sources[0]
       const thumbnail = source.thumbnail
       const bitmap = thumbnail.toBitmap()
       const size = thumbnail.getSize()

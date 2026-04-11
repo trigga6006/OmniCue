@@ -157,11 +157,19 @@ export default function App() {
     if (companionVisible) {
       setShowHistory(false)
       setShowSettings(false)
-      window.electronAPI.setPanelOpen(true)
-    } else {
-      window.electronAPI.setPanelOpen(false)
     }
   }, [companionVisible])
+
+  useEffect(() => {
+    const hasOverlayOpen =
+      companionVisible ||
+      showHistory ||
+      showSettings ||
+      contextMenu.visible ||
+      fullScreenAlert !== null
+
+    window.electronAPI.setPanelOpen(hasOverlayOpen)
+  }, [companionVisible, showHistory, showSettings, contextMenu.visible, fullScreenAlert])
 
   useEffect(() => {
     if (showHistory || showSettings) {
@@ -326,14 +334,12 @@ export default function App() {
           anchorX={Math.round(window.innerWidth / 2)}
           anchorY={BAR_TOP}
         />
-        <div className="pointer-events-auto">
-          <CompanionPanel
-            visible={companionVisible}
-            onClose={() => useCompanionStore.getState().close()}
-            anchorX={Math.round(window.innerWidth / 2)}
-            anchorY={BAR_TOP}
-          />
-        </div>
+        <CompanionPanel
+          visible={companionVisible}
+          onClose={() => useCompanionStore.getState().close()}
+          anchorX={Math.round(window.innerWidth / 2)}
+          anchorY={BAR_TOP}
+        />
       </LayoutGroup>
     </div>
   )

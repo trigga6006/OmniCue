@@ -15,6 +15,7 @@ export type AgentInteractionKind =
   | 'file-change-approval'
   | 'user-input'
   | 'provider-elicitation'
+  | 'action-confirmation'
   | 'unsupported'
 
 export type AgentInteractionStatus =

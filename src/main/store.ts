@@ -63,6 +63,8 @@ interface SettingsData {
   opencodeModel: string
   devRootPath: string
   agentPermissions: 'read-only' | 'workspace-write' | 'full-access'
+  companionHotkey: string
+  agentWorkspacePath: string
 }
 
 const SETTINGS_DEFAULTS: SettingsData = {
@@ -101,6 +103,8 @@ const SETTINGS_DEFAULTS: SettingsData = {
   opencodeModel: '',
   devRootPath: '',
   agentPermissions: 'read-only',
+  companionHotkey: 'Ctrl+Shift+Space',
+  agentWorkspacePath: '',
 }
 
 export const settingsStore = {

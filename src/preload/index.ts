@@ -1,8 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 const electronAPI = {
-  setIgnoreMouseEvents: (ignore: boolean): void => {
-    ipcRenderer.send('set-ignore-mouse-events', ignore)
+  setIgnoreMouseEvents: (ignore: boolean, opts?: { forward?: boolean }): void => {
+    ipcRenderer.send('set-ignore-mouse-events', ignore, opts)
   },
   getSettings: (): Promise<unknown> => ipcRenderer.invoke('get-settings'),
   setSettings: (partial: Record<string, unknown>): Promise<void> =>
@@ -18,6 +18,8 @@ const electronAPI = {
   clearHistory: (): Promise<void> => ipcRenderer.invoke('clear-history'),
   setAutoLaunch: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke('set-auto-launch', enabled),
+  updateCompanionHotkey: (accelerator: string): Promise<boolean> =>
+    ipcRenderer.invoke('update-companion-hotkey', accelerator),
   getPrimaryCenter: (): Promise<{ x: number; y: number }> =>
     ipcRenderer.invoke('get-primary-center'),
   getDisplays: (): Promise<{ id: number; label: string; centerX: number; centerY: number }[]> =>
@@ -84,14 +86,15 @@ const electronAPI = {
   sendTestAlert: (): void => {
     ipcRenderer.send('send-test-alert')
   },
-  captureActiveWindow: (): Promise<{ image: string; title: string; activeApp: string; processName: string; clipboardText: string; ocrId: number } | null> =>
-    ipcRenderer.invoke('capture-active-window'),
+  captureActiveWindow: (displayId?: number): Promise<{ image: string; title: string; activeApp: string; processName: string; clipboardText: string; ocrId: number; packId?: string; packName?: string; packConfidence?: number; packContext?: Record<string, string>; packVariant?: string } | null> =>
+    ipcRenderer.invoke('capture-active-window', displayId),
   getOcrResult: (ocrId: number): Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null> =>
     ipcRenderer.invoke('get-ocr-result', ocrId),
   sendAiMessage: (payload: {
     messages: unknown[]
     sessionId: string
     provider?: string
+    resumeMode?: 'normal' | 'replay-seed'
   }): Promise<{ ok: boolean }> => ipcRenderer.invoke('ai:send-message', payload),
   abortAiStream: (sessionId: string): void => {
     ipcRenderer.send('ai:abort', { sessionId })
@@ -154,6 +157,18 @@ const electronAPI = {
   openExternalUrl: (url: string): Promise<boolean> =>
     ipcRenderer.invoke('open-external-url', url),
 
+  // ─── Conversations ──────────────────────────────────────────────────────
+  listConversations: (): Promise<unknown[]> =>
+    ipcRenderer.invoke('conversations:list'),
+  loadConversation: (id: string): Promise<unknown> =>
+    ipcRenderer.invoke('conversations:load', id),
+  saveConversation: (data: { id: string; title: string; provider: string; messages: unknown[] }): Promise<void> =>
+    ipcRenderer.invoke('conversations:save', data),
+  deleteConversation: (id: string): Promise<void> =>
+    ipcRenderer.invoke('conversations:delete', id),
+  renameConversation: (id: string, title: string): Promise<void> =>
+    ipcRenderer.invoke('conversations:rename', id, title),
+
   // ─── Clipboard ───────────────────────────────────────────────────────────
   clipboardReadText: (): Promise<string> => ipcRenderer.invoke('clipboard:read-text'),
   clipboardWriteText: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write-text', text),
@@ -168,6 +183,20 @@ const electronAPI = {
     ipcRenderer.invoke('os:open-url', url),
   osRunSystemCommand: (command: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke('os:run-system-command', command),
+
+  // ─── Notes ──────────────────────────────────────────────────────────────
+  listNotes: (): Promise<unknown[]> => ipcRenderer.invoke('notes:list'),
+  getNote: (id: string): Promise<unknown> => ipcRenderer.invoke('notes:get', id),
+  deleteNote: (id: string): Promise<unknown> => ipcRenderer.invoke('notes:delete', id),
+
+  // ─── App Actions ─────────────────────────────────────────────────────────
+  executeAction: (request: unknown): Promise<unknown> => ipcRenderer.invoke('action:execute', request),
+  listActions: (): Promise<unknown[]> => ipcRenderer.invoke('action:list'),
+  onActionExecuting: (callback: (data: { actionId: string; name: string }) => void): (() => void) => {
+    const handler = (_event: unknown, data: { actionId: string; name: string }): void => callback(data)
+    ipcRenderer.on('action:executing', handler)
+    return () => ipcRenderer.removeListener('action:executing', handler)
+  },
 
   // ─── Watchers ────────────────────────────────────────────────────────────
   createWatcher: (watcher: unknown): Promise<void> => ipcRenderer.invoke('watcher:create', watcher),

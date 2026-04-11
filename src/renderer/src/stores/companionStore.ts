@@ -12,6 +12,11 @@ interface ScreenshotData {
   ocrId?: number
   ocrText?: string
   screenType?: string
+  packId?: string
+  packName?: string
+  packConfidence?: number
+  packContext?: Record<string, string>
+  packVariant?: string
 }
 
 interface CompanionState {
@@ -35,6 +40,20 @@ interface CompanionState {
   /** Pending agent interaction requests */
   pendingInteractions: AgentInteractionRequest[]
 
+  // ── Conversation history state ────────────────────────────────────────────
+  conversationId: string
+  conversationTitle: string
+  /** Whether this conversation was restored from saved history */
+  restoredFromHistory: boolean
+  /** Whether the next send needs a replay-seed for thread-based providers */
+  requiresReplaySeed: boolean
+  /** Whether the conversation list is visible instead of messages */
+  showConversationList: boolean
+  /** Whether the notes list is visible instead of messages */
+  showNotesList: boolean
+  /** Provider used for this conversation (for persistence) */
+  conversationProvider: string
+
   toggle: () => void
   open: () => void
   close: () => void
@@ -55,9 +74,36 @@ interface CompanionState {
   setPanelSizeMode: (mode: PanelSizeMode) => void
   addInteractionRequest: (request: AgentInteractionRequest) => void
   resolveInteraction: (id: string, status: AgentInteractionRequest['status']) => void
+
+  // ── Conversation history actions ──────────────────────────────────────────
+  saveCurrentConversation: () => void
+  loadConversation: (id: string) => Promise<void>
+  renameConversation: (title: string) => void
+  deleteConversation: (id: string) => Promise<void>
+  toggleConversationList: () => void
+  toggleNotesList: () => void
+  setConversationProvider: (provider: string) => void
 }
 
-export const useCompanionStore = create<CompanionState>((set) => ({
+// ── Auto-save helper (debounced) ────────────────────────────────────────────
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null
+
+function debouncedSave(): void {
+  if (saveTimer) clearTimeout(saveTimer)
+  saveTimer = setTimeout(() => {
+    const s = useCompanionStore.getState()
+    if (s.messages.length === 0) return
+    window.electronAPI.saveConversation({
+      id: s.conversationId,
+      title: s.conversationTitle,
+      provider: s.conversationProvider,
+      messages: s.messages,
+    })
+  }, 500)
+}
+
+export const useCompanionStore = create<CompanionState>((set, get) => ({
   visible: false,
   messages: [],
   isStreaming: false,
@@ -71,16 +117,25 @@ export const useCompanionStore = create<CompanionState>((set) => ({
   panelSizeMode: 'compact' as PanelSizeMode,
   pendingInteractions: [],
 
+  // Conversation history state
+  conversationId: generateId(),
+  conversationTitle: '',
+  restoredFromHistory: false,
+  requiresReplaySeed: false,
+  showConversationList: false,
+  showNotesList: false,
+  conversationProvider: '',
+
   toggle: () => set((s) => {
     if (s.visible) {
-      return { visible: false, viewHorizon: s.messages.length, showingAll: false, pendingScreenshot: null }
+      return { visible: false, viewHorizon: s.messages.length, showingAll: false, pendingScreenshot: null, showConversationList: false, showNotesList: false }
     }
     return { visible: true, showingAll: false }
   }),
   open: () => set({ visible: true, showingAll: false }),
-  close: () => set((s) => ({ visible: false, viewHorizon: s.messages.length, showingAll: false, pendingScreenshot: null, panelSizeMode: 'compact' as PanelSizeMode })),
+  close: () => set((s) => ({ visible: false, viewHorizon: s.messages.length, showingAll: false, pendingScreenshot: null, panelSizeMode: 'compact' as PanelSizeMode, showConversationList: false, showNotesList: false })),
 
-  addUserMessage: (content) =>
+  addUserMessage: (content) => {
     set((s) => {
       const msg: ChatMessage = {
         id: generateId(),
@@ -98,10 +153,26 @@ export const useCompanionStore = create<CompanionState>((set) => ({
         activeApp: s.autoScreenshot?.activeApp,
         processName: s.autoScreenshot?.processName,
         clipboardText: s.autoScreenshot?.clipboardText,
+        // Tool pack metadata
+        packId: s.autoScreenshot?.packId,
+        packName: s.autoScreenshot?.packName,
+        packConfidence: s.autoScreenshot?.packConfidence,
+        packContext: s.autoScreenshot?.packContext,
+        packVariant: s.autoScreenshot?.packVariant,
         createdAt: Date.now(),
       }
-      return { messages: [...s.messages, msg], pendingScreenshot: null }
-    }),
+      // Auto-name conversation from first user message
+      const title = s.conversationTitle || content.slice(0, 60).replace(/\n/g, ' ').trim()
+      return {
+        messages: [...s.messages, msg],
+        pendingScreenshot: null,
+        conversationTitle: title,
+        showConversationList: false,
+        showNotesList: false,
+      }
+    })
+    debouncedSave()
+  },
 
   startStreaming: (messageId) => {
     const msg: ChatMessage = {
@@ -133,23 +204,29 @@ export const useCompanionStore = create<CompanionState>((set) => ({
       ),
     })),
 
-  finishStreaming: (fullText) =>
+  finishStreaming: (fullText) => {
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === s.streamingMessageId ? { ...m, content: fullText } : m
       ),
       isStreaming: false,
       streamingMessageId: null,
-    })),
+      // Clear replay-seed flag after successful first resumed turn
+      requiresReplaySeed: false,
+    }))
+    debouncedSave()
+  },
 
-  streamError: (error) =>
+  streamError: (error) => {
     set((s) => ({
       messages: s.messages.map((m) =>
         m.id === s.streamingMessageId ? { ...m, content: `Error: ${error}` } : m
       ),
       isStreaming: false,
       streamingMessageId: null,
-    })),
+    }))
+    debouncedSave()
+  },
 
   setAutoScreenshot: (s) => set({ autoScreenshot: s }),
   captureAndResolve: (s) => {
@@ -167,26 +244,129 @@ export const useCompanionStore = create<CompanionState>((set) => ({
   },
   setPendingScreenshot: (s) => set({ pendingScreenshot: s }),
   clearMessages: () => set({ messages: [], viewHorizon: 0, showingAll: false }),
-  newSession: () =>
-    set((s) => {
-      window.electronAPI.cleanupAiSession(s.sessionId)
-      return {
-        messages: [],
-        sessionId: generateId(),
-        autoScreenshot: null,
-        pendingScreenshot: null,
-        viewHorizon: 0,
-        showingAll: false,
-        panelSizeMode: 'compact' as PanelSizeMode,
-        pendingInteractions: [],
-      }
-    }),
+
+  newSession: () => {
+    const s = get()
+    // Save current conversation before clearing (if it has messages)
+    if (s.messages.length > 0) {
+      window.electronAPI.saveConversation({
+        id: s.conversationId,
+        title: s.conversationTitle,
+        provider: s.conversationProvider,
+        messages: s.messages,
+      })
+    }
+    window.electronAPI.cleanupAiSession(s.sessionId)
+    set({
+      messages: [],
+      sessionId: generateId(),
+      conversationId: generateId(),
+      conversationTitle: '',
+      restoredFromHistory: false,
+      requiresReplaySeed: false,
+      conversationProvider: '',
+      autoScreenshot: null,
+      pendingScreenshot: null,
+      viewHorizon: 0,
+      showingAll: false,
+      panelSizeMode: 'compact' as PanelSizeMode,
+      pendingInteractions: [],
+      showConversationList: false,
+      showNotesList: false,
+    })
+  },
+
   showAll: () => set({ showingAll: true }),
   setPanelSizeMode: (mode) => set({ panelSizeMode: mode }),
   setAiMode: (mode) => {
     set({ aiMode: mode })
     window.electronAPI.setSettings({ aiMode: mode })
   },
+
+  // ── Conversation history actions ──────────────────────────────────────────
+
+  saveCurrentConversation: () => {
+    const s = get()
+    if (s.messages.length === 0) return
+    window.electronAPI.saveConversation({
+      id: s.conversationId,
+      title: s.conversationTitle,
+      provider: s.conversationProvider,
+      messages: s.messages,
+    })
+  },
+
+  loadConversation: async (id: string) => {
+    const s = get()
+    if (s.isStreaming) return
+
+    // Save current conversation before switching
+    if (s.messages.length > 0) {
+      window.electronAPI.saveConversation({
+        id: s.conversationId,
+        title: s.conversationTitle,
+        provider: s.conversationProvider,
+        messages: s.messages,
+      })
+    }
+
+    // Clean up current provider session
+    window.electronAPI.cleanupAiSession(s.sessionId)
+
+    const conv = await window.electronAPI.loadConversation(id)
+    if (!conv) return
+
+    // Determine if we need replay-seed (for Codex app-server)
+    const needsReplaySeed = conv.provider === 'codex'
+
+    set({
+      messages: conv.messages,
+      conversationId: conv.id,
+      conversationTitle: conv.title,
+      conversationProvider: conv.provider,
+      sessionId: generateId(),
+      restoredFromHistory: true,
+      requiresReplaySeed: needsReplaySeed,
+      autoScreenshot: null,
+      pendingScreenshot: null,
+      viewHorizon: 0,
+      showingAll: true,
+      panelSizeMode: 'compact' as PanelSizeMode,
+      pendingInteractions: [],
+      showConversationList: false,
+      showNotesList: false,
+    })
+  },
+
+  renameConversation: (title: string) => {
+    const s = get()
+    set({ conversationTitle: title })
+    window.electronAPI.renameConversation(s.conversationId, title)
+  },
+
+  deleteConversation: async (id: string) => {
+    const s = get()
+    await window.electronAPI.deleteConversation(id)
+    // If we deleted the currently loaded conversation, start fresh
+    if (s.conversationId === id) {
+      set({
+        messages: [],
+        conversationId: generateId(),
+        conversationTitle: '',
+        restoredFromHistory: false,
+        requiresReplaySeed: false,
+        conversationProvider: '',
+        viewHorizon: 0,
+        showingAll: false,
+      })
+    }
+  },
+
+  toggleConversationList: () => set((s) => ({ showConversationList: !s.showConversationList, showNotesList: false })),
+  toggleNotesList: () => set((s) => ({ showNotesList: !s.showNotesList, showConversationList: false })),
+
+  setConversationProvider: (provider: string) => set({ conversationProvider: provider }),
+
   addInteractionRequest: (request) =>
     set((s) => {
       const pendingInteractions = [...s.pendingInteractions, request]

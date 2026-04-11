@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useMemo, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import { MessageSquarePlus, X, ChevronUp, Maximize2, Minimize2 } from 'lucide-react'
+import { MessageSquarePlus, X, ChevronUp, Maximize2, Minimize2, History, FileText } from 'lucide-react'
 import { glassCompanionStyle } from '@/lib/glass'
 import { useCompanionStore } from '@/stores/companionStore'
 import { CompanionMessage } from './CompanionMessage'
@@ -10,6 +10,8 @@ import oiLogo from '@/assets/oi-logo.svg'
 import { ScreenshotLightbox } from './ScreenshotLightbox'
 import { ProviderBadge } from './ProviderBadge'
 import { QuickActions } from './QuickActions'
+import { ConversationList } from './ConversationList'
+import { NotesList } from './NotesList'
 import { PANEL_SIZES } from '@/lib/constants'
 import { preferLargerPanelSize, resolvePanelSize } from '@/lib/resolvePanelSize'
 
@@ -35,6 +37,10 @@ export const CompanionPanel = memo(function CompanionPanel({
   const panelSizeMode = useCompanionStore((s) => s.panelSizeMode)
   const sizeConfig = PANEL_SIZES[panelSizeMode]
   const setPendingScreenshot = useCompanionStore((s) => s.setPendingScreenshot)
+  const showConversationList = useCompanionStore((s) => s.showConversationList)
+  const toggleConversationList = useCompanionStore((s) => s.toggleConversationList)
+  const showNotesList = useCompanionStore((s) => s.showNotesList)
+  const toggleNotesList = useCompanionStore((s) => s.toggleNotesList)
   const viewHorizon = useCompanionStore((s) => s.viewHorizon)
   const showingAll = useCompanionStore((s) => s.showingAll)
   const showAll = useCompanionStore((s) => s.showAll)
@@ -136,7 +142,7 @@ export const CompanionPanel = memo(function CompanionPanel({
       <AnimatePresence>
         {visible && !expandedScreenshot && (
           <motion.div
-            className="fixed z-50 flex flex-col
+            className="fixed z-50 flex flex-col pointer-events-auto
               backdrop-blur-3xl backdrop-saturate-[1.6]
               bg-[rgba(14,14,18,0.93)] border-[0.5px] border-[rgba(255,255,255,0.12)]
               rounded-2xl overflow-hidden"
@@ -185,6 +191,30 @@ export const CompanionPanel = memo(function CompanionPanel({
                   </button>
                 )}
                 <button
+                  onClick={toggleConversationList}
+                  className={`w-6 h-6 flex items-center justify-center rounded-md
+                    transition-colors cursor-pointer
+                    ${showConversationList
+                      ? 'text-[var(--g-text-bright)] bg-[var(--g-bg-active)]'
+                      : 'text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]'
+                    }`}
+                  title="Conversations"
+                >
+                  <History size={14} />
+                </button>
+                <button
+                  onClick={toggleNotesList}
+                  className={`w-6 h-6 flex items-center justify-center rounded-md
+                    transition-colors cursor-pointer
+                    ${showNotesList
+                      ? 'text-[var(--g-text-bright)] bg-[var(--g-bg-active)]'
+                      : 'text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]'
+                    }`}
+                  title="Notes"
+                >
+                  <FileText size={14} />
+                </button>
+                <button
                   onClick={newSession}
                   className="w-6 h-6 flex items-center justify-center rounded-md
                     text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]
@@ -205,17 +235,21 @@ export const CompanionPanel = memo(function CompanionPanel({
               </div>
             </div>
 
-            {/* Messages */}
+            {/* Messages or Conversation List */}
             <motion.div
               ref={scrollRef}
-              className="flex-1 overflow-y-auto px-3 py-3 min-h-[120px]"
+              className="flex-1 overflow-y-auto min-h-[120px]"
               animate={{ maxHeight: sizeConfig.panelMaxH }}
               transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
             >
-              {visibleMessages.length === 0 && !hasEarlier ? (
-                <div className="flex-1" />
+              {showNotesList ? (
+                <NotesList />
+              ) : showConversationList ? (
+                <ConversationList />
+              ) : visibleMessages.length === 0 && !hasEarlier ? (
+                <div className="flex-1 px-3 py-3" />
               ) : (
-                <>
+                <div className="px-3 py-3">
                   {hasEarlier && !showingAll && (
                     <button
                       onClick={showAll}
@@ -236,7 +270,7 @@ export const CompanionPanel = memo(function CompanionPanel({
                       onOpenScreenshot={openScreenshot}
                     />
                   ))}
-                </>
+                </div>
               )}
             </motion.div>
 
@@ -253,7 +287,7 @@ export const CompanionPanel = memo(function CompanionPanel({
             )}
 
             {/* Quick actions — show above input when no messages */}
-            {visibleMessages.length === 0 && !hasEarlier && <QuickActions />}
+            {visibleMessages.length === 0 && !hasEarlier && !showNotesList && !showConversationList && <QuickActions />}
 
             {/* Input */}
             <div className="border-t border-[var(--g-line)]">

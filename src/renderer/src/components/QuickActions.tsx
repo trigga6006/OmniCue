@@ -1,12 +1,21 @@
-import { memo, useCallback, useMemo } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import {
   FileText, AlignLeft, PenLine, Bug, Code, Search,
   ClipboardList, CheckCircle2, BarChart3, HelpCircle, Zap,
+  GitBranch, Terminal, FolderOpen,
 } from 'lucide-react'
 import { sendCompanionMessage } from '@/lib/sendMessage'
 import { useCompanionStore } from '@/stores/companionStore'
+import { registry } from '../../../shared/tool-packs/registry'
+import type { PackMatchResult, PackQuickAction } from '../../../shared/tool-packs/types'
 import type { LucideIcon } from 'lucide-react'
+
+const ICON_MAP: Record<string, LucideIcon> = {
+  FileText, AlignLeft, PenLine, Bug, Code, Search,
+  ClipboardList, CheckCircle2, BarChart3, HelpCircle, Zap,
+  GitBranch, Terminal, FolderOpen,
+}
 
 interface QuickAction {
   label: string
@@ -14,6 +23,20 @@ interface QuickAction {
   icon: LucideIcon
 }
 
+/** Resolve pack quick actions into renderable QuickAction objects. */
+function resolvePackActions(packId: string, match: PackMatchResult, ocrText?: string): QuickAction[] {
+  const pack = registry.find(p => p.id === packId)
+  if (!pack) return []
+  const raw = pack.getQuickActions(match, ocrText)
+  return raw
+    .map((a: PackQuickAction) => ({
+      label: a.label,
+      prompt: a.prompt,
+      icon: ICON_MAP[a.icon] || HelpCircle,
+    }))
+}
+
+/** Fallback: screenType-based actions (original logic). */
 function getActionsForScreen(screenType?: string, ocrText?: string): QuickAction[] {
   const hasError = ocrText && /error|failed|exception|traceback|fatal|panic/i.test(ocrText)
 
@@ -97,13 +120,57 @@ export const QuickActions = memo(function QuickActions() {
   const isStreaming = useCompanionStore((s) => s.isStreaming)
   const autoScreenshot = useCompanionStore((s) => s.autoScreenshot)
 
+  // Refresh context when the active app, title, or pack changes while suggestions are visible
+  const lastKeyRef = useRef('')
+  useEffect(() => {
+    const buildKey = (s: typeof autoScreenshot) =>
+      `${s?.activeApp ?? ''}|${s?.title ?? ''}|${s?.packId ?? ''}|${s?.packVariant ?? ''}`
+    lastKeyRef.current = buildKey(autoScreenshot)
+
+    const POLL_MS = 5000
+    const id = window.setInterval(async () => {
+      if (useCompanionStore.getState().isStreaming) return
+      const result = await window.electronAPI.captureActiveWindow()
+      if (!result) return
+      const newKey = `${result.activeApp}|${result.title}|${result.packId ?? ''}|${result.packVariant ?? ''}`
+      if (newKey !== lastKeyRef.current) {
+        lastKeyRef.current = newKey
+        useCompanionStore.getState().captureAndResolve(result)
+      }
+    }, POLL_MS)
+    return () => clearInterval(id)
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Wait for OCR to resolve before showing chips — prevents flicker
-  // between default actions and context-aware ones
   const ocrReady = !autoScreenshot || !!autoScreenshot.screenType
-  const actions = useMemo(
-    () => ocrReady ? getActionsForScreen(autoScreenshot?.screenType, autoScreenshot?.ocrText) : [],
-    [ocrReady, autoScreenshot?.screenType, autoScreenshot?.ocrText]
-  )
+  const actions = useMemo(() => {
+    if (!ocrReady) return []
+
+    // Pack-driven actions take priority when confidence is sufficient
+    if (autoScreenshot?.packId && autoScreenshot.packConfidence != null && autoScreenshot.packConfidence >= 0.5) {
+      const match: PackMatchResult = {
+        packId: autoScreenshot.packId,
+        packName: autoScreenshot.packName || autoScreenshot.packId,
+        confidence: autoScreenshot.packConfidence,
+        context: autoScreenshot.packContext || {},
+        variant: autoScreenshot.packVariant,
+      }
+      const packActions = resolvePackActions(autoScreenshot.packId, match, autoScreenshot.ocrText)
+      if (packActions.length > 0) return packActions
+    }
+
+    // Fallback to screenType-based actions
+    return getActionsForScreen(autoScreenshot?.screenType, autoScreenshot?.ocrText)
+  }, [
+    ocrReady,
+    autoScreenshot?.screenType,
+    autoScreenshot?.ocrText,
+    autoScreenshot?.packId,
+    autoScreenshot?.packConfidence,
+    autoScreenshot?.packVariant,
+    autoScreenshot?.packName,
+    autoScreenshot?.packContext,
+  ])
 
   const handleAction = useCallback(async (prompt: string) => {
     if (isStreaming) return

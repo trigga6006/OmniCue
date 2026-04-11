@@ -1,3 +1,17 @@
+export type { ActionTier, ActionDefinition, ActionRequest, ActionResult } from '../../../shared/actions'
+
+export interface Note {
+  id: string
+  title: string
+  content: string
+  savedFrom?: string
+  source?: string
+  createdAt: number
+  updatedAt?: number
+}
+
+export type NoteSummary = Omit<Note, 'content' | 'updatedAt'>
+
 export type ChatRole = 'user' | 'assistant'
 
 export interface ToolUseEntry {
@@ -25,6 +39,12 @@ export interface ChatMessage {
   activeApp?: string
   processName?: string
   clipboardText?: string
+  /** Tool pack metadata */
+  packId?: string
+  packName?: string
+  packConfidence?: number
+  packContext?: Record<string, string>
+  packVariant?: string
   createdAt: number
 }
 
@@ -52,11 +72,36 @@ export type AiProvider = 'codex' | 'claude' | 'opencode' | 'kimicode' | 'openai'
 
 // ── Agent Interaction Types ──────────────────────────────────────────────────
 
+// ── Conversation History Types ───────────────────────────────────────────────
+
+export interface ConversationSummary {
+  id: string
+  title: string
+  provider: string
+  createdAt: number
+  updatedAt: number
+  messageCount: number
+  firstMessage: string
+}
+
+export interface StoredConversation {
+  id: string
+  title: string
+  provider: string
+  createdAt: number
+  updatedAt: number
+  messageCount: number
+  messages: ChatMessage[]
+}
+
+// ── Agent Interaction Types ──────────────────────────────────────────────────
+
 export type AgentInteractionKind =
   | 'command-approval'
   | 'file-change-approval'
   | 'user-input'
   | 'provider-elicitation'
+  | 'action-confirmation'
   | 'unsupported'
 
 export type AgentInteractionStatus =
@@ -169,6 +214,7 @@ export interface Settings {
   opencodeModel: string
   devRootPath: string
   agentPermissions: AgentPermissions
+  companionHotkey: string
 }
 
 export interface AppNotification {
@@ -197,13 +243,14 @@ export interface Reminder {
 }
 
 export interface ElectronAPI {
-  setIgnoreMouseEvents: (ignore: boolean) => void
+  setIgnoreMouseEvents: (ignore: boolean, opts?: { forward?: boolean }) => void
   getSettings: () => Promise<Settings>
   setSettings: (settings: Partial<Settings>) => Promise<void>
   getHistory: () => Promise<HistoryEntry[]>
   addHistory: (entry: HistoryEntry) => Promise<void>
   clearHistory: () => Promise<void>
   setAutoLaunch: (enabled: boolean) => Promise<void>
+  updateCompanionHotkey: (accelerator: string) => Promise<boolean>
   getPrimaryCenter: () => Promise<{ x: number; y: number }>
   getDisplays: () => Promise<{ id: number; label: string; centerX: number; centerY: number }[]>
   openSettingsWindow: (tab?: string) => void
@@ -232,9 +279,9 @@ export interface ElectronAPI {
   getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   getPrimaryDisplayBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   sendTestAlert: () => void
-  captureActiveWindow: () => Promise<{ image: string; title: string; activeApp: string; processName: string; clipboardText: string; ocrId: number } | null>
+  captureActiveWindow: (displayId?: number) => Promise<{ image: string; title: string; activeApp: string; processName: string; clipboardText: string; ocrId: number; packId?: string; packName?: string; packConfidence?: number; packContext?: Record<string, string>; packVariant?: string } | null>
   getOcrResult: (ocrId: number) => Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>
-  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; provider?: string }) => Promise<{ ok: boolean }>
+  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; provider?: string; resumeMode?: 'normal' | 'replay-seed' }) => Promise<{ ok: boolean }>
   abortAiStream: (sessionId: string) => void
   cleanupAiSession: (sessionId: string) => void
   onAiStreamToken: (cb: (data: { sessionId: string; token: string }) => void) => () => void
@@ -248,6 +295,13 @@ export interface ElectronAPI {
   getClaudeStatus: () => Promise<{ authenticated: boolean; planType?: string }>
   selectFolder: () => Promise<string | null>
   openExternalUrl: (url: string) => Promise<boolean>
+
+  // ─── Conversations ──────────────────────────────────────────────────────
+  listConversations: () => Promise<ConversationSummary[]>
+  loadConversation: (id: string) => Promise<StoredConversation | null>
+  saveConversation: (data: { id: string; title: string; provider: string; messages: ChatMessage[] }) => Promise<void>
+  deleteConversation: (id: string) => Promise<void>
+  renameConversation: (id: string, title: string) => Promise<void>
 
   // ─── Clipboard ───────────────────────────────────────────────────────────
   clipboardReadText: () => Promise<string>
@@ -266,6 +320,16 @@ export interface ElectronAPI {
   deleteWatcher: (id: string) => Promise<void>
   resumeWatchers: () => Promise<void>
   onWatcherTriggered: (cb: (data: WatcherEvent) => void) => () => void
+
+  // ─── Notes ───────────────────────────────────────────────────────────────
+  listNotes: () => Promise<NoteSummary[]>
+  getNote: (id: string) => Promise<Note | null>
+  deleteNote: (id: string) => Promise<{ ok: boolean; error?: string }>
+
+  // ─── App Actions ────────────────────────────────────────────────────────
+  executeAction: (request: import('../../../shared/actions').ActionRequest) => Promise<import('../../../shared/actions').ActionResult>
+  listActions: () => Promise<import('../../../shared/actions').ActionDefinition[]>
+  onActionExecuting: (cb: (data: { actionId: string; name: string }) => void) => () => void
 }
 
 declare global {

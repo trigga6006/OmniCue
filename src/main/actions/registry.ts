@@ -1,0 +1,136 @@
+import type { ActionDefinition } from '../../shared/actions'
+
+export const ACTION_REGISTRY: ActionDefinition[] = [
+  // ── Safe ──────────────────────────────────────────────────────────────────
+  {
+    id: 'clipboard-write',
+    name: 'Copy to clipboard',
+    tier: 'safe',
+    category: 'clipboard',
+    description: 'Write text to the system clipboard',
+    params: [{ name: 'text', type: 'string', required: true, description: 'Text to copy' }],
+  },
+  {
+    id: 'open-url',
+    name: 'Open URL',
+    tier: 'safe',
+    category: 'navigation',
+    description: 'Open a URL in the default browser',
+    params: [{ name: 'url', type: 'string', required: true, description: 'HTTP or HTTPS URL' }],
+  },
+  {
+    id: 'open-file',
+    name: 'Open file',
+    tier: 'safe',
+    category: 'os',
+    description: 'Open a file with its default application',
+    params: [{ name: 'path', type: 'string', required: true, description: 'Absolute file path' }],
+  },
+  {
+    id: 'reveal-in-folder',
+    name: 'Reveal in file manager',
+    tier: 'safe',
+    category: 'os',
+    description: 'Show a file or folder in Windows Explorer',
+    params: [{ name: 'path', type: 'string', required: true, description: 'Absolute file path' }],
+  },
+  {
+    id: 'save-note',
+    name: 'Save note',
+    tier: 'safe',
+    category: 'notes',
+    description: 'Save a text note linked to the current window/app',
+    params: [
+      { name: 'text', type: 'string', required: true, description: 'Note content' },
+      { name: 'title', type: 'string', required: false, description: 'Note title (auto-generated if omitted)' },
+    ],
+  },
+  {
+    id: 'list-notes',
+    name: 'List notes',
+    tier: 'safe',
+    category: 'notes',
+    description: 'List all saved notes',
+    params: [],
+  },
+  {
+    id: 'get-note',
+    name: 'Read note',
+    tier: 'safe',
+    category: 'notes',
+    description: 'Read a saved note by ID',
+    params: [{ name: 'id', type: 'string', required: true, description: 'Note ID' }],
+  },
+  {
+    id: 'delete-note',
+    name: 'Delete note',
+    tier: 'safe',
+    category: 'notes',
+    description: 'Delete a saved note by ID',
+    params: [{ name: 'id', type: 'string', required: true, description: 'Note ID' }],
+  },
+
+  // ── Guided ────────────────────────────────────────────────────────────────
+  {
+    id: 'type-text',
+    name: 'Type text',
+    tier: 'guided',
+    category: 'input',
+    description: 'Type text into the currently focused field',
+    params: [{ name: 'text', type: 'string', required: true, description: 'Text to type' }],
+  },
+  {
+    id: 'press-key',
+    name: 'Press key',
+    tier: 'guided',
+    category: 'input',
+    description: 'Press a keyboard shortcut (e.g. "ctrl+s", "alt+tab", "enter")',
+    params: [{ name: 'keys', type: 'string', required: true, description: 'Key combo like "ctrl+s" or "alt+f4"' }],
+  },
+  {
+    id: 'click-element',
+    name: 'Click UI element',
+    tier: 'guided',
+    category: 'input',
+    description: 'Click a UI element by automation name or screen coordinates',
+    params: [
+      { name: 'name', type: 'string', required: false, description: 'UI Automation name of the element' },
+      { name: 'x', type: 'number', required: false, description: 'Screen X coordinate' },
+      { name: 'y', type: 'number', required: false, description: 'Screen Y coordinate' },
+    ],
+  },
+  {
+    id: 'switch-app',
+    name: 'Switch to app',
+    tier: 'guided',
+    category: 'navigation',
+    description: 'Bring an application window to the foreground',
+    params: [{ name: 'processName', type: 'string', required: true, description: 'Process name or window title substring' }],
+  },
+
+  // ── Dangerous ─────────────────────────────────────────────────────────────
+  {
+    id: 'delete-file',
+    name: 'Delete file',
+    tier: 'dangerous',
+    category: 'os',
+    description: 'Move a file to the recycle bin',
+    params: [{ name: 'path', type: 'string', required: true, description: 'Absolute file path to delete' }],
+  },
+  {
+    id: 'send-input',
+    name: 'Send message',
+    tier: 'dangerous',
+    category: 'input',
+    description: 'Press Enter to send a composed message in the active app',
+    params: [{ name: 'confirm', type: 'boolean', required: true, description: 'Must be true to proceed' }],
+  },
+  {
+    id: 'submit-form',
+    name: 'Submit form',
+    tier: 'dangerous',
+    category: 'input',
+    description: 'Click Submit or press Enter on a form',
+    params: [{ name: 'confirm', type: 'boolean', required: true, description: 'Must be true to proceed' }],
+  },
+]

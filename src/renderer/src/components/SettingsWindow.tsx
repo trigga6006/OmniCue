@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import {
   Clock, Settings, Trash2, X, CheckCircle2, AlertCircle,
-  Bell, Repeat, Timer, Plus, Pencil, Sparkles, FolderOpen, ChevronDown
+  Bell, Repeat, Timer, Plus, Pencil, Sparkles, FolderOpen, ChevronDown, Keyboard
 } from 'lucide-react'
 import claudeLogo from '@/assets/claude-logo.svg'
 import codexLogo from '@/assets/codex-logo.svg'
@@ -1144,6 +1144,10 @@ function AiTab({
           )}
         </div>
       </Section>
+
+      <Section title="Companion Hotkey">
+        <HotkeyRecorder currentAccelerator={settings.companionHotkey || 'Ctrl+Shift+Space'} />
+      </Section>
     </div>
   )
 }
@@ -1254,6 +1258,224 @@ function CompatProviderSettings({
         />
       </Row>
     </>
+  )
+}
+
+// ─── Hotkey Recorder ──────────────────────────────────────────────────────────
+
+/** Map e.code to a canonical Electron-accelerator part. */
+const CODE_TO_ACCEL: Record<string, string> = {
+  ControlLeft: 'Ctrl', ControlRight: 'Ctrl',
+  ShiftLeft: 'Shift', ShiftRight: 'Shift',
+  AltLeft: 'Alt', AltRight: 'Alt',
+  MetaLeft: 'Meta', MetaRight: 'Meta',
+  Space: 'Space', Tab: 'Tab', Enter: 'Enter',
+  Backspace: 'Backspace', Delete: 'Delete',
+  Escape: 'Escape', Insert: 'Insert',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  Backquote: '`', Minus: '-', Equal: '=',
+  BracketLeft: '[', BracketRight: ']', Backslash: '\\',
+  Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/',
+}
+
+function codeToAccelPart(code: string): string {
+  if (CODE_TO_ACCEL[code]) return CODE_TO_ACCEL[code]
+  if (code.startsWith('Key')) return code.slice(3)          // KeyA → A
+  if (code.startsWith('Digit')) return code.slice(5)        // Digit1 → 1
+  if (code.startsWith('Numpad')) return 'num' + code.slice(6) // Numpad0 → num0
+  if (/^F\d+$/.test(code)) return code                     // F1–F24
+  return code
+}
+
+/** Modifiers always sort first in a stable order. */
+const MOD_ORDER = ['Ctrl', 'Shift', 'Alt', 'Meta']
+function buildAccelerator(parts: string[]): string {
+  const mods = parts.filter((p) => MOD_ORDER.includes(p)).sort((a, b) => MOD_ORDER.indexOf(a) - MOD_ORDER.indexOf(b))
+  const keys = parts.filter((p) => !MOD_ORDER.includes(p))
+  return [...mods, ...keys].join('+')
+}
+
+function HotkeyRecorder({ currentAccelerator }: { currentAccelerator: string }) {
+  const [recording, setRecording] = useState(false)
+  const [pending, setPending] = useState<string | null>(null)
+  const [liveKeys, setLiveKeys] = useState<string[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const heldRef = useRef(new Set<string>())       // raw codes currently held
+  const peakRef = useRef(new Set<string>())        // all codes pressed during this gesture
+
+  const startRecording = useCallback(() => {
+    setRecording(true)
+    setPending(null)
+    setLiveKeys([])
+    setError(null)
+    heldRef.current.clear()
+    peakRef.current.clear()
+  }, [])
+
+  const cancel = useCallback(() => {
+    setRecording(false)
+    setPending(null)
+    setLiveKeys([])
+    setError(null)
+  }, [])
+
+  const save = useCallback(async () => {
+    if (!pending) return
+    setError(null)
+    const ok = await window.electronAPI.updateCompanionHotkey(pending)
+    if (ok) {
+      setRecording(false)
+      setPending(null)
+      setLiveKeys([])
+    } else {
+      setError('Could not register — shortcut may conflict with another app.')
+    }
+  }, [pending])
+
+  // Track keydown/keyup while recording to accumulate the full combo
+  useEffect(() => {
+    if (!recording) return
+    const held = heldRef.current
+    const peak = peakRef.current
+
+    const updateLive = () => {
+      const parts = [...peak].map(codeToAccelPart)
+      // Deduplicate (e.g. ControlLeft + ControlRight → one Ctrl)
+      const unique = [...new Set(parts)]
+      setLiveKeys(unique)
+    }
+
+    const onDown = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.repeat) return
+      held.add(e.code)
+      peak.add(e.code)
+      updateLive()
+    }
+
+    const onUp = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      held.delete(e.code)
+      // When all keys released → finalize the combo
+      if (held.size === 0 && peak.size > 0) {
+        const parts = [...new Set([...peak].map(codeToAccelPart))]
+        const accel = buildAccelerator(parts)
+        setPending(accel)
+        peak.clear()
+      }
+    }
+
+    // If the window loses focus while keys are held, treat it as a full release
+    const onBlur = () => {
+      if (peak.size > 0) {
+        const parts = [...new Set([...peak].map(codeToAccelPart))]
+        const accel = buildAccelerator(parts)
+        setPending(accel)
+      }
+      held.clear()
+      peak.clear()
+    }
+
+    window.addEventListener('keydown', onDown, true)
+    window.addEventListener('keyup', onUp, true)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onDown, true)
+      window.removeEventListener('keyup', onUp, true)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [recording])
+
+  // Decide what to display: live keys while holding, pending after release, or current saved
+  const displayParts: string[] =
+    recording && liveKeys.length > 0 && !pending ? liveKeys
+    : (pending || currentAccelerator).split('+')
+
+  return (
+    <div className="px-4 py-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Keyboard size={14} className="text-white/40" />
+          <span className="text-[13px] text-white/65">Toggle AI panel</span>
+        </div>
+
+        {!recording ? (
+          <button
+            onClick={startRecording}
+            className="text-[11px] text-white/50 hover:text-white/80 px-2 py-1
+              rounded-lg border border-white/[0.08] hover:border-white/[0.15]
+              bg-white/[0.04] hover:bg-white/[0.08] transition-colors cursor-pointer"
+          >
+            Record
+          </button>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={cancel}
+              className="text-[11px] text-white/40 hover:text-white/70 px-2 py-1
+                rounded-lg border border-white/[0.06] hover:border-white/[0.12]
+                transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            {pending && (
+              <button
+                onClick={save}
+                className="text-[11px] text-green-400/80 hover:text-green-400 px-2 py-1
+                  rounded-lg border border-green-400/20 hover:border-green-400/40
+                  bg-green-400/[0.06] hover:bg-green-400/[0.12] transition-colors cursor-pointer"
+              >
+                Save
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Key chips display */}
+      <div
+        className={`flex items-center gap-1.5 px-3 py-2.5 rounded-lg border transition-colors min-h-[38px] ${
+          recording
+            ? 'border-white/[0.2] bg-white/[0.06]'
+            : 'border-white/[0.06] bg-white/[0.03]'
+        }`}
+      >
+        {recording && liveKeys.length === 0 && !pending ? (
+          <motion.span
+            className="text-[12px] text-white/30 italic"
+            animate={{ opacity: [0.3, 0.7, 0.3] }}
+            transition={{ duration: 1.5, repeat: Infinity }}
+          >
+            Press your hotkey combination…
+          </motion.span>
+        ) : (
+          displayParts.map((key, i) => (
+            <span key={i} className="flex items-center gap-1.5">
+              {i > 0 && <span className="text-[10px] text-white/20">+</span>}
+              <span
+                className="px-2 py-0.5 rounded-md text-[12px] font-mono
+                  bg-white/[0.08] border border-white/[0.12] text-white/75"
+              >
+                {key}
+              </span>
+            </span>
+          ))
+        )}
+      </div>
+
+      {error && (
+        <p className="text-[11px] text-red-400/80">{error}</p>
+      )}
+
+      {recording && (
+        <p className="text-[10px] text-white/25">
+          Hold your keys together, then release. Click Save to apply.
+        </p>
+      )}
+    </div>
   )
 }
 

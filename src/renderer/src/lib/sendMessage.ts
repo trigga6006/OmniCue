@@ -2,6 +2,25 @@ import { useCompanionStore } from '@/stores/companionStore'
 import { generateId } from '@/lib/utils'
 import type { ChatMessage, AiProvider } from '@/lib/types'
 
+const AI_PROVIDERS: AiProvider[] = [
+  'codex',
+  'claude',
+  'opencode',
+  'kimicode',
+  'openai',
+  'gemini',
+  'deepseek',
+  'groq',
+  'mistral',
+  'xai',
+  'glm',
+  'kimi',
+]
+
+function isAiProvider(value: string): value is AiProvider {
+  return AI_PROVIDERS.includes(value as AiProvider)
+}
+
 /**
  * Build a structured desktop context block from message metadata.
  */
@@ -13,6 +32,17 @@ function formatDesktopContext(m: ChatMessage): string {
   if (m.screenshotTitle) lines.push(`  windowTitle: ${m.screenshotTitle}`)
   if (m.screenType && m.screenType !== 'unknown') lines.push(`  screenType: ${m.screenType}`)
   if (m.clipboardText) lines.push(`  clipboard: ${m.clipboardText.slice(0, 500)}`)
+  if (m.packId) {
+    lines.push(`  pack: ${m.packId}`)
+    if (m.packVariant) lines.push(`  packVariant: ${m.packVariant}`)
+    if (m.packConfidence != null) lines.push(`  packConfidence: ${m.packConfidence.toFixed(2)}`)
+    if (m.packContext && Object.keys(m.packContext).length > 0) {
+      lines.push('  packContext:')
+      for (const [k, v] of Object.entries(m.packContext)) {
+        lines.push(`    ${k}: ${v}`)
+      }
+    }
+  }
   if (m.ocrText) {
     const indented = m.ocrText.replace(/\n/g, '\n    ')
     lines.push(`  screenText: |\n    ${indented}`)
@@ -93,14 +123,28 @@ export async function sendCompanionMessage(text: string): Promise<void> {
 
   // Get provider from settings (cached in store or fetched)
   const settings = await window.electronAPI.getSettings()
-  const provider: AiProvider = settings.aiProvider || 'codex'
+  const configuredProvider: AiProvider = settings.aiProvider || 'codex'
+
+  const currentStore = useCompanionStore.getState()
+  const provider: AiProvider = isAiProvider(currentStore.conversationProvider)
+    ? currentStore.conversationProvider
+    : configuredProvider
+
+  // Track provider on the conversation for persistence
+  if (currentStore.conversationProvider !== provider) {
+    currentStore.setConversationProvider(provider)
+  }
+
+  // Determine if this is a replay-seed send (restored Codex conversation)
+  const resumeMode = provider === 'codex' && currentStore.requiresReplaySeed ? 'replay-seed' : 'normal'
 
   const streamMsgId = generateId()
   store.startStreaming(streamMsgId)
 
   window.electronAPI.sendAiMessage({
     messages: coreMessages,
-    sessionId: store.sessionId,
+    sessionId: currentStore.sessionId,
     provider,
+    resumeMode,
   })
 }

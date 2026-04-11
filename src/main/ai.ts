@@ -59,6 +59,84 @@ If you need the user to choose, confirm, or provide input, ask in normal chat te
 
 Do not say that you are "using the interactive picker" or "waiting on the UI" in this session.`
 
+const DESKTOP_TOOLS_PROMPT = `## OmniCue Desktop Tools
+
+When shell access is available, you can query the user's desktop through OmniCue's local HTTP API:
+
+- \`curl.exe -s http://127.0.0.1:19191/displays\` - list connected displays and the current one
+- \`curl.exe -s http://127.0.0.1:19191/context\` - active app and window title
+- \`curl.exe -s "http://127.0.0.1:19191/context?includeClipboard=1"\` - same, plus clipboard when needed
+- \`curl.exe -s http://127.0.0.1:19191/screen-text\` - OCR text from the display OmniCue is currently on
+- \`curl.exe -s "http://127.0.0.1:19191/screen-text?display=<id>"\` - OCR text from a specific display
+
+Use /screen-text for most desktop questions. Use /displays first if the user mentions another monitor. Only request clipboard when it is directly relevant.
+
+## OmniCue App Pack Tools
+
+You can inspect the active application pack through OmniCue's local API:
+
+- \`curl.exe -s http://127.0.0.1:19191/pack-tools\` - list available app packs
+- \`curl.exe -s http://127.0.0.1:19191/pack-tools/active\` - get the active pack with structured metadata (file name, project, browser site, etc.)
+
+Use /pack-tools/active when you need app-specific context beyond the current desktop-context block.
+
+## OmniCue App Actions
+
+You can take actions on the user's desktop through OmniCue's action API at http://127.0.0.1:19191.
+
+### Listing actions
+\`curl.exe -s http://127.0.0.1:19191/actions\`
+
+### Executing an action (PowerShell)
+Use Invoke-RestMethod to avoid quoting issues:
+\`\`\`powershell
+$body = @{ actionId = "clipboard-write"; params = @{ text = "hello" } } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+\`\`\`
+
+### Action tiers
+- **safe** — executes immediately: clipboard-write, open-url, open-file, reveal-in-folder, save-note
+- **guided** — executes with a brief indicator: type-text, press-key, click-element, switch-app
+- **dangerous** — requires explicit user confirmation: delete-file, send-input, submit-form
+
+### Copy-pasteable examples (PowerShell)
+\`\`\`powershell
+# Copy to clipboard
+$body = @{ actionId = "clipboard-write"; params = @{ text = "hello" } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Open URL
+$body = @{ actionId = "open-url"; params = @{ url = "https://example.com" } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Type into focused field
+$body = @{ actionId = "type-text"; params = @{ text = "Hello world" } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Press keyboard shortcut
+$body = @{ actionId = "press-key"; params = @{ keys = "ctrl+s" } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Click UI element by name
+$body = @{ actionId = "click-element"; params = @{ name = "Save" } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Click at screen coordinates
+$body = @{ actionId = "click-element"; params = @{ x = 500; y = 300 } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Switch to app
+$body = @{ actionId = "switch-app"; params = @{ processName = "chrome" } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Save a note
+$body = @{ actionId = "save-note"; params = @{ text = "Remember this"; title = "My Note" } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+\`\`\`
+
+For dangerous actions, the request blocks until the user approves or denies. Check the \`ok\` field in the response.
+Use /context or /screen-text first to understand the screen before acting.
+
+### Agent notes
+OmniCue stores notes as markdown under ~/OmniCue/notes/.
+
+- \`curl.exe -s http://127.0.0.1:19191/notes\` — list saved notes
+- \`curl.exe -s "http://127.0.0.1:19191/notes?id=<id>"\` — read a note
+
+You can also use actions: save-note, list-notes, get-note, delete-note.`
+
 function getCodexSystemPrompt(): string {
   return `${SYSTEM_PROMPT}\n\n${CODEX_INTERACTION_INSTRUCTIONS}`
 }
@@ -153,7 +231,7 @@ function buildPrompt(messages: ChatMessage[], systemPrompt: string): string {
 }
 
 function buildNonInteractivePrompt(messages: ChatMessage[]): string {
-  return buildPrompt(messages, `${SYSTEM_PROMPT}\n\n${NON_INTERACTIVE_SESSION_INSTRUCTIONS}`)
+  return buildPrompt(messages, `${SYSTEM_PROMPT}\n\n${NON_INTERACTIVE_SESSION_INSTRUCTIONS}\n\n${DESKTOP_TOOLS_PROMPT}`)
 }
 
 async function writeDataUrlToTempFile(dataUrl: string): Promise<PreparedImage> {
@@ -214,7 +292,8 @@ class CodexAppServerClient {
     abortSignal?: AbortSignal,
     _model?: string,
     cwd?: string,
-    permissions: AgentPermissions = 'read-only'
+    permissions: AgentPermissions = 'read-only',
+    resumeMode: 'normal' | 'replay-seed' = 'normal'
   ): Promise<void> {
     await this.ensureInitialized()
 
@@ -262,9 +341,24 @@ class CodexAppServerClient {
     const inputs: Array<{ type: string; text?: string; path?: string }> = []
     const text = getTextContent(latestUserMessage.content)
     if (text) {
+      // For resumed conversations, prepend a transcript seed so the new thread has context
+      let fullText = text
+      if (resumeMode === 'replay-seed' && messages.length > 1) {
+        const priorMessages = messages.slice(0, -1)
+        const seed = priorMessages
+          .map((m) => {
+            const role = m.role === 'user' ? 'User' : 'Assistant'
+            const content = getTextContent(m.content)
+            // Truncate very long messages to keep the seed compact
+            const truncated = content.length > 500 ? content.slice(0, 500) + '...' : content
+            return `[${role}] ${truncated}`
+          })
+          .join('\n\n')
+        fullText = `Conversation so far:\n${seed}\n\nContinue this conversation. The user's next message is:\n${text}`
+      }
       inputs.push({
         type: 'text',
-        text: `${getCodexSystemPrompt()}\n\nUser:\n${text}`,
+        text: `${getCodexSystemPrompt()}\n\nUser:\n${fullText}`,
       })
     }
 
@@ -619,7 +713,7 @@ class CodexAppServerClient {
       cwd,
       approvalPolicy: threadApprovalPolicy,
       sandbox: CODEX_SANDBOX_MAP[permissions],
-      developerInstructions: CODEX_INTERACTION_INSTRUCTIONS,
+      developerInstructions: `${CODEX_INTERACTION_INSTRUCTIONS}\n\n${DESKTOP_TOOLS_PROMPT}`,
       ephemeral: true,
     })) as { thread?: { id?: string } }
 
@@ -1610,7 +1704,8 @@ export async function streamAiResponse(
   _modelOverride?: string,
   provider?: string,
   cwd?: string,
-  permissions: AgentPermissions = 'read-only'
+  permissions: AgentPermissions = 'read-only',
+  resumeMode: 'normal' | 'replay-seed' = 'normal'
 ): Promise<void> {
   const settings = settingsStore.get()
   const resolvedProvider = provider || settings.aiProvider || 'codex'
@@ -1711,7 +1806,7 @@ export async function streamAiResponse(
   if (codexStatus.authenticated) {
     // Tier 1: Codex app-server (JSON-RPC subprocess) — no model override, app-server picks its own
     try {
-      await codexAppServerClient.streamSession(sessionId, messages, callbacks, abortSignal, undefined, cwd, permissions)
+      await codexAppServerClient.streamSession(sessionId, messages, callbacks, abortSignal, undefined, cwd, permissions, resumeMode)
       return
     } catch (appServerErr) {
       const appMsg = appServerErr instanceof Error ? appServerErr.message : String(appServerErr)

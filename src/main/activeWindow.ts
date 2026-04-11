@@ -3,7 +3,7 @@
  * Captures the foreground window title and process info before Electron steals focus.
  */
 
-import { spawnSync } from 'child_process'
+import { spawn, spawnSync } from 'child_process'
 import { writeFileSync, unlinkSync, existsSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
@@ -94,28 +94,87 @@ export function cleanupActiveWindowScript(): void {
   try { unlinkSync(SCRIPT_PATH) } catch { /* best effort */ }
 }
 
+// ── Async active window detection (non-blocking) ───────────────────────────
+
+/**
+ * Non-blocking version of getActiveWindow using spawn instead of spawnSync.
+ * The child process captures GetForegroundWindow() almost immediately after
+ * launch — well before Electron can steal focus on the next event-loop tick.
+ */
+export function getActiveWindowAsync(): Promise<ActiveWindowInfo | null> {
+  if (process.platform !== 'win32') return Promise.resolve(null)
+
+  return new Promise((resolve) => {
+    try {
+      ensureScript()
+
+      const child = spawn('powershell', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', SCRIPT_PATH,
+      ], {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      })
+
+      let stdout = ''
+      child.stdout.on('data', (data: Buffer) => { stdout += data.toString() })
+
+      const timer = setTimeout(() => {
+        child.kill()
+        resolve(null)
+      }, 3000)
+
+      child.on('close', (code) => {
+        clearTimeout(timer)
+        const raw = stdout.trim()
+        if (!raw || code !== 0) { resolve(null); return }
+        try {
+          const parsed = JSON.parse(raw) as { t: string; p: string; a: string }
+          if (!parsed.t && !parsed.p) { resolve(null); return }
+          resolve({
+            windowTitle: parsed.t || '',
+            processName: parsed.p || 'unknown',
+            activeApp: parsed.a || parsed.p || 'unknown',
+          })
+        } catch {
+          resolve(null)
+        }
+      })
+
+      child.on('error', () => {
+        clearTimeout(timer)
+        resolve(null)
+      })
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
 // ── Cached active window for hotkey race condition ──────────────────────────
 
-let cachedWindow: { info: ActiveWindowInfo | null; capturedAt: number } | null = null
+let cachedWindow: { info: Promise<ActiveWindowInfo | null>; capturedAt: number } | null = null
 const CACHE_TTL_MS = 2000
 
 /**
- * Capture and cache the active window. Called from the hotkey handler
- * in the main process BEFORE the Electron window takes focus.
+ * Start capturing the active window asynchronously. Called from the hotkey
+ * handler BEFORE Electron takes focus. The spawn starts a child process
+ * that reads GetForegroundWindow() almost instantly — non-blocking so the
+ * hotkey handler can send IPC and update state without waiting ~500ms.
  */
 export function cacheActiveWindow(): void {
-  cachedWindow = { info: getActiveWindow(), capturedAt: Date.now() }
+  cachedWindow = { info: getActiveWindowAsync(), capturedAt: Date.now() }
 }
 
 /**
  * Consume the cached active window info if it's fresh enough.
- * Falls back to a live call if the cache is stale or empty.
+ * Falls back to an async call if the cache is stale or empty.
  */
-export function getActiveWindowCached(): ActiveWindowInfo | null {
+export async function getActiveWindowCached(): Promise<ActiveWindowInfo | null> {
   if (cachedWindow && Date.now() - cachedWindow.capturedAt < CACHE_TTL_MS) {
-    const info = cachedWindow.info
+    const info = await cachedWindow.info
     cachedWindow = null // consume once
     return info
   }
-  return getActiveWindow()
+  return getActiveWindowAsync()
 }

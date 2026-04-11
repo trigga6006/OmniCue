@@ -42,6 +42,7 @@ export const DEFAULT_SETTINGS = {
   opencodeModel: '',
   devRootPath: '',
   agentPermissions: 'read-only' as const,
+  companionHotkey: 'Ctrl+Shift+Space',
 }
 
 export const TIMER_CIRCLE_SIZE = 48

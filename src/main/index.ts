@@ -8,6 +8,7 @@ import { overlayState } from './overlayState'
 import { settingsStore } from './store'
 import { cleanupAllTempImages } from './ai'
 import { cacheActiveWindow, cleanupActiveWindowScript } from './activeWindow'
+import { cleanupActionScripts } from './actions'
 import icon from '../../resources/icon.png?asset'
 import trayIconPath from '../../resources/tray-icon.png?asset'
 
@@ -165,29 +166,36 @@ function createTray(): void {
 }
 
 /**
- * Lightweight cursor-position polling that replaces the expensive
- * `setIgnoreMouseEvents(true, { forward: true })` Chromium mouse hook.
+ * Cursor-position polling — three-state mouse event system.
  *
- * With the small-window architecture, we just check if the cursor is
- * within the window bounds (plus a small padding). When it enters,
- * we switch to capture mode so the renderer gets normal mouse events
- * (and handles leave-detection itself).
+ * States:
+ *   IGNORE   – setIgnoreMouseEvents(true)                  – fully click-through, no events
+ *   FORWARD  – setIgnoreMouseEvents(true, {forward:true})  – clicks pass through, mouse events forwarded
+ *   CAPTURE  – setIgnoreMouseEvents(false)                 – window captures clicks (renderer sets this)
+ *
+ * The polling loop only transitions IGNORE → FORWARD when the cursor enters
+ * the window zone. The renderer then does precise data-interactive hit-testing
+ * and transitions FORWARD ↔ CAPTURE. When the cursor leaves all interactive
+ * elements, the renderer goes back to FORWARD. When the cursor leaves the
+ * window entirely, the renderer goes back to IGNORE.
+ *
+ * This ensures clicks are ONLY blocked when the cursor is directly over a
+ * visible, interactive UI element — never over transparent areas.
  */
 function startCursorPolling(win: BrowserWindow): void {
   const POLL_MS = 32 // ~30 fps
   const PAD = 10 // px padding around window
-  const COOLDOWN_MS = 200 // minimum time between ignore→capture transitions
-  // Only check the narrow bar region, not the full window height.
-  // The bar sits at BAR_TOP=10 and elements are ~36px tall.
-  // Below this is transparent space for panels/notifications that the
-  // renderer reaches via data-interactive once capture is already active.
+  const COOLDOWN_MS = 200 // minimum time between ignore→forward transitions
+  // Only check the narrow bar region when panels are closed.
   const BAR_ZONE_HEIGHT = 72
+  // Extra inward padding for "exit zone" — the cursor must move further
+  // OUT than the distance required to trigger entry. This prevents
+  // boundary-jitter when the cursor sits right at the edge.
+  const EXIT_PAD = 24
 
   setInterval(() => {
     if (win.isDestroyed() || !win.isVisible()) return
-    if (!overlayState.isIgnoring) return // renderer handles leave detection
     if (overlayState.locked) return // drag in progress
-    if (Date.now() - overlayState.lastIgnoreTime < COOLDOWN_MS) return
 
     // Don't steal focus from other app windows (e.g. settings window)
     const focused = BrowserWindow.getFocusedWindow()
@@ -195,18 +203,44 @@ function startCursorPolling(win: BrowserWindow): void {
 
     const cursor = screen.getCursorScreenPoint()
     const b = win.getBounds()
-
     const checkHeight = overlayState.panelOpen ? b.height : BAR_ZONE_HEIGHT
 
-    if (
+    // Entry zone — slightly padded around the window
+    const inEntryZone =
       cursor.x >= b.x - PAD &&
       cursor.x <= b.x + b.width + PAD &&
       cursor.y >= b.y - PAD &&
       cursor.y <= b.y + checkHeight + PAD
-    ) {
-      overlayState.isIgnoring = false
-      win.setIgnoreMouseEvents(false)
+
+    // Exit zone — wider margin so cursor must move further out before
+    // we disable forwarding. This creates hysteresis at the boundary.
+    const inExitZone =
+      cursor.x >= b.x - EXIT_PAD &&
+      cursor.x <= b.x + b.width + EXIT_PAD &&
+      cursor.y >= b.y - EXIT_PAD &&
+      cursor.y <= b.y + checkHeight + EXIT_PAD
+
+    if (inEntryZone) {
+      // Cursor is in the window zone — ensure forwarding is active so the
+      // renderer receives mouse events for hit-testing (clicks still pass through).
+      if (overlayState.isIgnoring && !overlayState.isForwarding) {
+        if (Date.now() - overlayState.lastIgnoreTime < COOLDOWN_MS) return
+        overlayState.isIgnoring = true
+        overlayState.isForwarding = true
+        win.setIgnoreMouseEvents(true, { forward: true })
+      }
+    } else if (!inExitZone) {
+      // Cursor is well outside the zone — go fully click-through.
+      // We only do this when outside the wider exit zone (hysteresis).
+      if (overlayState.isForwarding || !overlayState.isIgnoring) {
+        overlayState.isIgnoring = true
+        overlayState.isForwarding = false
+        overlayState.lastIgnoreTime = Date.now()
+        win.setIgnoreMouseEvents(true)
+      }
     }
+    // If cursor is between entry and exit zones, maintain current state
+    // (no toggling — this is the hysteresis band).
   }, POLL_MS)
 }
 
@@ -234,17 +268,47 @@ app.whenReady().then(() => {
 
   createWindow()
 
-  // Register global hotkey for AI companion
-  globalShortcut.register('Ctrl+Shift+Space', () => {
-    // Capture active window BEFORE Electron takes focus
+  // Register global hotkey for AI companion (dynamic — reads from settings)
+  let lastHotkeyTime = 0
+  const HOTKEY_COOLDOWN_MS = 400
+  let currentHotkey: string | null = null
+
+  function companionHotkeyCallback(): void {
+    const now = Date.now()
+    if (now - lastHotkeyTime < HOTKEY_COOLDOWN_MS) return
+    lastHotkeyTime = now
+
     cacheActiveWindow()
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('toggle-companion')
       if (!mainWindow.isVisible()) mainWindow.show()
-      mainWindow.setIgnoreMouseEvents(false)
-      overlayState.isIgnoring = false
-      overlayState.panelOpen = !overlayState.panelOpen
+      // Use forward mode so clicks pass through until cursor reaches interactive UI
+      mainWindow.setIgnoreMouseEvents(true, { forward: true })
+      overlayState.isIgnoring = true
+      overlayState.isForwarding = true
     }
+  }
+
+  function registerCompanionHotkey(accelerator: string): boolean {
+    if (currentHotkey) {
+      globalShortcut.unregister(currentHotkey)
+      currentHotkey = null
+    }
+    const ok = globalShortcut.register(accelerator, companionHotkeyCallback)
+    if (ok) currentHotkey = accelerator
+    return ok
+  }
+
+  const savedHotkey = settingsStore.get().companionHotkey || 'Ctrl+Shift+Space'
+  registerCompanionHotkey(savedHotkey)
+
+  // Allow renderer to re-register the companion hotkey at runtime
+  ipcMain.handle('update-companion-hotkey', (_event, accelerator: string) => {
+    const ok = registerCompanionHotkey(accelerator)
+    if (ok) {
+      settingsStore.set({ companionHotkey: accelerator })
+    }
+    return ok
   })
 
   // Start HTTP API server for CLI / Claude Code integration
@@ -265,6 +329,7 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   cleanupAllTempImages().catch(() => {})
   cleanupActiveWindowScript()
+  cleanupActionScripts()
 })
 
 app.on('window-all-closed', () => {

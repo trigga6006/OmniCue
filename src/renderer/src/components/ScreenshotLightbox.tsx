@@ -18,7 +18,7 @@ export const ScreenshotLightbox = memo(function ScreenshotLightbox({
     <AnimatePresence>
       {image && (
         <motion.div
-          className="fixed inset-0 z-[80] flex items-center justify-center p-4
+          className="fixed inset-0 z-[80] flex items-center justify-center p-4 pointer-events-auto
             backdrop-blur-2xl backdrop-saturate-[1.15]"
           style={{
             background: 'var(--g-overlay-strong)',
