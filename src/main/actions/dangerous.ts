@@ -5,6 +5,9 @@
 
 import { ensurePsScript, runPsScript } from './powershell'
 import { ok, fail, type ActionHandler } from './helpers'
+import { runScript } from '../terminal-bridge/scripts'
+import { getActiveWindowAsync } from '../activeWindow'
+import { resolveTerminalSession } from '../terminal-bridge/session'
 
 const T = 'dangerous' as const
 
@@ -54,5 +57,26 @@ export const dangerousHandlers: Record<string, ActionHandler> = {
   'submit-form': async (params) => {
     if (params.confirm !== true) return fail('submit-form', T, 'confirm must be true')
     return pressEnterAction('submit-form')
+  },
+
+  'terminal-run-script': async (params) => {
+    const script = String(params.script ?? '')
+    if (!script) return fail('terminal-run-script', T, 'script is required')
+
+    let cwd = params.cwd ? String(params.cwd) : null
+    if (!cwd) {
+      const win = await getActiveWindowAsync()
+      if (win) {
+        const session = resolveTerminalSession(win)
+        cwd = session?.titleCwd || null
+      }
+    }
+    if (!cwd) return fail('terminal-run-script', T, 'No cwd available')
+
+    const timeoutMs = typeof params.timeoutMs === 'number' ? params.timeoutMs : 30000
+    const result = await runScript({ script, cwd, timeoutMs })
+    return result.ok
+      ? ok('terminal-run-script', T, JSON.stringify(result))
+      : fail('terminal-run-script', T, JSON.stringify(result))
   },
 }

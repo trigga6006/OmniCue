@@ -106,6 +106,17 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: 'List visible running applications',
     params: [],
   },
+  // ── Navigation actions (safe) ────────────────────────────────────────────────
+  {
+    id: 'open-system-location',
+    name: 'Open system location',
+    tier: 'safe',
+    category: 'navigation',
+    description: 'Open a system settings page, utility, or special folder by catalog ID',
+    params: [
+      { name: 'locationId', type: 'string', required: true, description: 'Navigation catalog ID (e.g. "startup-apps", "task-manager", "downloads")' },
+    ],
+  },
   // ── Browser enrichment actions (safe) ──────────────────────────────────────
   {
     id: 'browser-url',
@@ -284,5 +295,168 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     category: 'input',
     description: 'Click Submit or press Enter on a form',
     params: [{ name: 'confirm', type: 'boolean', required: true, description: 'Must be true to proceed' }],
+  },
+  // ── Terminal bridge actions (safe — read-only) ────────────────────────────
+  {
+    id: 'terminal-read-buffer',
+    name: 'Read terminal buffer',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'Read visible text and scrollback from the active terminal',
+    params: [],
+  },
+  {
+    id: 'terminal-get-cwd',
+    name: 'Get terminal cwd',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'Get the current working directory of the active terminal',
+    params: [],
+  },
+  {
+    id: 'terminal-list-processes',
+    name: 'List terminal processes',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'List running commands and recent command history in the terminal',
+    params: [],
+  },
+  {
+    id: 'terminal-tail-logs',
+    name: 'Tail logs',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'Tail a log file with optional pattern filtering',
+    params: [
+      { name: 'path', type: 'string', required: false, description: 'Log file path (auto-detect if omitted)' },
+      { name: 'lines', type: 'number', required: false, description: 'Number of lines (default 50, max 500)' },
+      { name: 'pattern', type: 'string', required: false, description: 'Regex filter pattern' },
+      { name: 'cwd', type: 'string', required: false, description: 'Project directory for auto-detection' },
+    ],
+  },
+  {
+    id: 'terminal-list-scripts',
+    name: 'List project scripts',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'Detect available project scripts (package.json, Makefile, Cargo.toml, etc.)',
+    params: [
+      { name: 'cwd', type: 'string', required: false, description: 'Project directory' },
+    ],
+  },
+  {
+    id: 'terminal-parse-stacktrace',
+    name: 'Parse stack trace',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'Parse a stack trace and resolve frames to local files',
+    params: [
+      { name: 'text', type: 'string', required: true, description: 'Stack trace text, or "auto" to read from terminal' },
+      { name: 'cwd', type: 'string', required: false, description: 'Project root for path resolution' },
+    ],
+  },
+  {
+    id: 'terminal-git-status',
+    name: 'Git status',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'Get git status (branch, staged, unstaged, untracked files)',
+    params: [
+      { name: 'cwd', type: 'string', required: false, description: 'Repo directory' },
+    ],
+  },
+  {
+    id: 'terminal-git-diff',
+    name: 'Git diff',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'Show uncommitted changes as a unified diff',
+    params: [
+      { name: 'cwd', type: 'string', required: false, description: 'Repo directory' },
+      { name: 'staged', type: 'boolean', required: false, description: 'Only staged changes' },
+      { name: 'file', type: 'string', required: false, description: 'Limit to specific file' },
+    ],
+  },
+  {
+    id: 'terminal-git-log',
+    name: 'Git log',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'Show recent commit history',
+    params: [
+      { name: 'cwd', type: 'string', required: false, description: 'Repo directory' },
+      { name: 'count', type: 'number', required: false, description: 'Number of commits (default 10)' },
+    ],
+  },
+  {
+    id: 'terminal-error-packet',
+    name: 'Build error packet',
+    tier: 'safe',
+    category: 'terminal',
+    description: 'Auto-build a rich error context packet from the terminal (error, stack trace, source, git diff)',
+    params: [],
+  },
+  // ── IDE bridge actions (safe — read-only) ─────────────────────────────────
+  {
+    id: 'ide-get-state',
+    name: 'Get editor state',
+    tier: 'safe',
+    category: 'ide',
+    description: 'Get best-effort editor state (editor, workspace, open file, language)',
+    params: [],
+  },
+  {
+    id: 'ide-read-selection',
+    name: 'Read editor selection',
+    tier: 'safe',
+    category: 'ide',
+    description: 'Read selected text via UI Automation (best-effort, no clipboard dance)',
+    params: [],
+  },
+  // ── IDE bridge actions (guided — sends keys / opens files) ────────────────
+  {
+    id: 'ide-capture-selection',
+    name: 'Capture editor selection',
+    tier: 'guided',
+    category: 'ide',
+    description: 'Capture selected text via clipboard dance (Ctrl+C, read, restore)',
+    params: [],
+  },
+  {
+    id: 'ide-open-file',
+    name: 'Open file in editor',
+    tier: 'guided',
+    category: 'ide',
+    description: 'Open a file at a specific line in the user\'s editor',
+    params: [
+      { name: 'file', type: 'string', required: true, description: 'Absolute file path' },
+      { name: 'line', type: 'number', required: false, description: 'Line number (1-based)' },
+      { name: 'column', type: 'number', required: false, description: 'Column number (1-based)' },
+      { name: 'editor', type: 'string', required: false, description: 'Editor name (auto-detect if omitted)' },
+    ],
+  },
+  {
+    id: 'ide-jump-to-frame',
+    name: 'Jump to stack frame',
+    tier: 'guided',
+    category: 'ide',
+    description: 'Parse stack trace and open the top project-local frame in editor',
+    params: [
+      { name: 'text', type: 'string', required: true, description: 'Stack trace text, or "auto" to read from terminal' },
+      { name: 'cwd', type: 'string', required: false, description: 'Project root for path resolution' },
+    ],
+  },
+  // ── Terminal bridge actions (dangerous — runs scripts) ────────────────────
+  {
+    id: 'terminal-run-script',
+    name: 'Run project script',
+    tier: 'dangerous',
+    category: 'terminal',
+    description: 'Execute a project script (npm test, make build, cargo test, etc.)',
+    params: [
+      { name: 'script', type: 'string', required: true, description: 'Script name (e.g., "test", "build")' },
+      { name: 'cwd', type: 'string', required: false, description: 'Project directory' },
+      { name: 'timeoutMs', type: 'number', required: false, description: 'Timeout in ms (default 30000)' },
+    ],
   },
 ]

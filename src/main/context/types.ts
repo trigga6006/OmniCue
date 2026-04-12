@@ -11,12 +11,21 @@ export interface EditorContext {
   projectName?: string
   language?: string
   isDirty: boolean
+  editorFamily?: string
+  selectionAvailable?: boolean
+  gitStatus?: 'clean' | 'modified' | 'staged'
 }
 
 export interface TerminalContext {
   shell: string
   cwd?: string
   isAdmin: boolean
+  cwdSource?: 'process' | 'prompt' | 'title'
+  projectRoot?: string
+  gitBranch?: string
+  projectType?: string
+  runningProcesses?: Array<{ name: string; commandLine: string }>
+  recentError?: { message: string; type: string | null; hasStackTrace: boolean }
 }
 
 export interface BrowserContext {

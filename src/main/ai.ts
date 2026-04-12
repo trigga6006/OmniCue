@@ -183,7 +183,54 @@ OmniCue tracks what the user was doing across conversations (active app, open fi
 - \`curl.exe -s "http://127.0.0.1:19191/session-memory/capsule?conversationId=<id>"\` — resume capsule for a conversation
 - \`curl.exe -s http://127.0.0.1:19191/session-memory/sessions\` — list all tracked sessions
 
-Use session memory when the user asks to resume work, recall what they were doing, or reference something from a previous session.`
+Use session memory when the user asks to resume work, recall what they were doing, or reference something from a previous session.
+
+## Terminal Bridge
+
+When the active window is a terminal, these endpoints provide structured access to terminal state:
+
+- \`curl.exe -s http://127.0.0.1:19191/terminal/buffer\` — read visible terminal text and scrollback
+- \`curl.exe -s http://127.0.0.1:19191/terminal/cwd\` — current working directory and project root
+- \`curl.exe -s http://127.0.0.1:19191/terminal/processes\` — running commands and recent command history
+- \`curl.exe -s "http://127.0.0.1:19191/terminal/logs?path=/path/to/file.log&lines=100&pattern=ERROR"\` — tail a log file with filtering
+- \`curl.exe -s "http://127.0.0.1:19191/terminal/scripts?cwd=/path/to/project"\` — detect project scripts (package.json, Makefile, etc.)
+- \`curl.exe -s http://127.0.0.1:19191/terminal/git-status\` — git branch, staged, unstaged, untracked
+- \`curl.exe -s http://127.0.0.1:19191/terminal/git-diff\` — uncommitted changes as unified diff
+- \`curl.exe -s "http://127.0.0.1:19191/terminal/git-log?count=10"\` — recent commit history
+- \`curl.exe -s http://127.0.0.1:19191/terminal/error-packet\` — rich error context (error + stack trace + source + git diff)
+- \`curl.exe -X POST http://127.0.0.1:19191/terminal/parse-stacktrace -H "Content-Type: application/json" -d '{"text":"auto"}'\` — parse stack trace from terminal buffer
+
+Git and script endpoints accept \`?cwd=...\` to target a specific directory. If omitted, they use the active terminal's cwd.
+
+**Important: Use /terminal/error-packet when the user has an error visible in their terminal.** It provides much richer context than just reading the screen.
+
+## IDE Bridge
+
+When the active window is an IDE, these endpoints provide editor state:
+
+- \`curl.exe -s http://127.0.0.1:19191/ide/state\` — editor, workspace, open file, language, dirty state
+- \`curl.exe -s http://127.0.0.1:19191/ide/selection\` — selected text via UI Automation (best-effort)
+
+For actions that modify state (opening files, capturing selections via clipboard, running scripts), use the action system:
+
+\`\`\`powershell
+# Open file at line in editor
+$body = @{ actionId = "ide-open-file"; params = @{ file = "C:\\path\\to\\file.ts"; line = 42 } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Jump from stack trace to source (parses trace + opens top project frame)
+$body = @{ actionId = "ide-jump-to-frame"; params = @{ text = "auto" } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Capture editor selection via clipboard dance (guided tier)
+$body = @{ actionId = "ide-capture-selection"; params = @{} } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+
+# Run project script (dangerous tier — requires user confirmation)
+$body = @{ actionId = "terminal-run-script"; params = @{ script = "test" } } | ConvertTo-Json; Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
+\`\`\`
+
+### Updated action tiers
+- **safe** — terminal-read-buffer, terminal-get-cwd, terminal-list-processes, terminal-tail-logs, terminal-list-scripts, terminal-parse-stacktrace, terminal-git-status, terminal-git-diff, terminal-git-log, terminal-error-packet, ide-get-state, ide-read-selection (plus all previous safe actions)
+- **guided** — ide-capture-selection, ide-open-file, ide-jump-to-frame (plus all previous guided actions)
+- **dangerous** — terminal-run-script (plus all previous dangerous actions)`
 
 function getCodexSystemPrompt(): string {
   return `${SYSTEM_PROMPT}\n\n${CODEX_INTERACTION_INSTRUCTIONS}`

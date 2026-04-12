@@ -140,7 +140,6 @@ export const MorphingPill = memo(function MorphingPill({
         style={{ height: PILL_H }}
         animate={{ width: computedWidth }}
         transition={widthTransition}
-        layoutId="omni-pill"
       >
         {/* Glass background */}
         <div

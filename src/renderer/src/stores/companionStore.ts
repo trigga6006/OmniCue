@@ -1,7 +1,67 @@
 import { create } from 'zustand'
 import type { ChatMessage, AgentInteractionRequest } from '@/lib/types'
 import { generateId } from '@/lib/utils'
-import type { PanelSizeMode } from '@/lib/constants'
+import { PANEL_SIZES, type PanelSizeMode } from '@/lib/constants'
+import { suppressRegionPublish } from '@/hooks/useClickThrough'
+
+// ── Transition coordination ────────────────────────────────────────────────
+// Monotonically increasing token so async open/close/resize flows can detect
+// when a newer transition has superseded them ("latest request wins").
+let _transitionSeq = 0
+let _pendingOpenRelease: (() => void) | null = null
+let _pendingSizeRelease: (() => void) | null = null
+
+function beginTransition(): number {
+  return ++_transitionSeq
+}
+
+function isCurrentTransition(token: number): boolean {
+  return token === _transitionSeq
+}
+
+function replacePendingRelease(kind: 'open' | 'size', nextRelease: (() => void) | null): void {
+  const previousRelease = kind === 'open' ? _pendingOpenRelease : _pendingSizeRelease
+
+  if (kind === 'open') {
+    _pendingOpenRelease = nextRelease
+  } else {
+    _pendingSizeRelease = nextRelease
+  }
+
+  // Acquire the new suppression before releasing the superseded one so we
+  // don't briefly republish regions in the middle of a replacement transition.
+  if (previousRelease) previousRelease()
+}
+
+function clearPendingRelease(kind: 'open' | 'size'): void {
+  if (kind === 'open') {
+    _pendingOpenRelease = null
+  } else {
+    _pendingSizeRelease = null
+  }
+}
+
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()))
+}
+
+/** Called by CompanionPanel when the enter animation completes. */
+export function releasePanelOpenTransition(): void {
+  if (_pendingOpenRelease) {
+    const release = _pendingOpenRelease
+    _pendingOpenRelease = null
+    release()
+  }
+}
+
+/** Called by CompanionPanel when the outer shell width transition completes. */
+export function releasePanelSizeTransition(): void {
+  if (_pendingSizeRelease) {
+    const release = _pendingSizeRelease
+    _pendingSizeRelease = null
+    release()
+  }
+}
 
 interface ScreenshotData {
   image: string
@@ -72,6 +132,8 @@ interface CompanionState {
   showAll: () => void
   setAiMode: (mode: 'fast' | 'auto' | 'pro') => void
   setPanelSizeMode: (mode: PanelSizeMode) => void
+  /** Coordinated panel resize: suppresses region publish, awaits window resize, then transitions. */
+  transitionPanelSize: (mode: PanelSizeMode) => Promise<void>
   addInteractionRequest: (request: AgentInteractionRequest) => void
   resolveInteraction: (id: string, status: AgentInteractionRequest['status']) => void
 
@@ -141,14 +203,37 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
     }
     return { visible: true, showingAll: false }
   }),
-  open: () => set({ visible: true, showingAll: false }),
+  open: async () => {
+    const token = beginTransition()
+    const release = suppressRegionPublish()
+    replacePendingRelease('open', release)
+
+    const config = PANEL_SIZES.compact
+    await window.electronAPI.requestWindowResize(config.windowW, config.windowH)
+    await nextFrame()
+
+    if (!isCurrentTransition(token)) {
+      if (_pendingOpenRelease === release) {
+        clearPendingRelease('open')
+        release()
+      }
+      return
+    }
+
+    // Panel mounts → Framer Motion enter animation runs.
+    // Suppression is released by CompanionPanel's onAnimationComplete
+    // via releasePanelOpenTransition().
+    set({ visible: true, showingAll: false, panelSizeMode: 'compact' as PanelSizeMode })
+  },
   close: () => set((s) => ({
     visible: false,
     // Preserve viewHorizon during streaming so reopening shows the active exchange
     viewHorizon: s.isStreaming ? s.viewHorizon : s.messages.length,
     showingAll: s.isStreaming ? s.showingAll : false,
     pendingScreenshot: null,
-    panelSizeMode: 'compact' as PanelSizeMode,
+    // Don't reset panelSizeMode here — changing it during the exit animation
+    // shifts the animate prop mid-exit, causing a visible size glitch.
+    // It resets to 'compact' on the next open().
     showConversationList: false,
     showNotesList: false,
   })),
@@ -296,6 +381,31 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
 
   showAll: () => set({ showingAll: true }),
   setPanelSizeMode: (mode) => set({ panelSizeMode: mode }),
+  transitionPanelSize: async (mode) => {
+    const state = get()
+    if (state.panelSizeMode === mode || !state.visible) return
+
+    const token = beginTransition()
+    const release = suppressRegionPublish()
+    replacePendingRelease('size', release)
+
+    const config = PANEL_SIZES[mode]
+    await window.electronAPI.requestWindowResize(config.windowW, config.windowH)
+    await nextFrame()
+
+    if (!isCurrentTransition(token)) {
+      if (_pendingSizeRelease === release) {
+        clearPendingRelease('size')
+        release()
+      }
+      return
+    }
+
+    // State change triggers CSS transition on width/maxHeight.
+    // Suppression is released by CompanionPanel's transitionend handler
+    // via releasePanelSizeTransition().
+    set({ panelSizeMode: mode })
+  },
   setAiMode: (mode) => {
     set({ aiMode: mode })
     window.electronAPI.setSettings({ aiMode: mode })

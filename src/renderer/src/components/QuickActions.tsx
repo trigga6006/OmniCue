@@ -178,8 +178,8 @@ export const QuickActions = memo(function QuickActions() {
   }, [isStreaming])
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 px-3 pb-1.5 min-h-[30px]">
-      <AnimatePresence mode="wait">
+    <div className="flex items-center gap-1.5 px-3 py-1.5 h-[34px] overflow-hidden">
+      <AnimatePresence>
         {actions.map((action, i) => (
           <motion.button
             key={action.label}

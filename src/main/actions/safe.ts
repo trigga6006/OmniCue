@@ -16,6 +16,23 @@ import {
   summarizeFonts,
   getSelectedTextViaUiAutomation,
 } from '../browser'
+import { getActiveWindowAsync } from '../activeWindow'
+import { getNavEntry, launchSystemLocation } from '../navigation'
+import {
+  resolveTerminalSession,
+  readTerminalBuffer,
+  getTerminalProcesses,
+  getGitStatus,
+  getGitDiff,
+  getGitLog,
+  tailLogs,
+  detectScripts,
+  buildErrorPacket,
+  findProjectRoot,
+} from '../terminal-bridge'
+import { parseStackTrace } from '../ide-bridge/stack-trace'
+import { getIdeState } from '../ide-bridge/state'
+import { readIdeSelection } from '../ide-bridge/selection'
 
 const T = 'safe' as const
 
@@ -181,6 +198,21 @@ export const safeHandlers: Record<string, ActionHandler> = {
     return ok('list-running-apps', T, apps.length > 0 ? apps.join('\n') : 'No visible apps found')
   },
 
+  // ── Navigation actions ──────────────────────────────────────────────────
+
+  'open-system-location': async (params) => {
+    const locationId = String(params.locationId ?? '').trim()
+    if (!locationId) return fail('open-system-location', T, 'locationId is required')
+
+    const entry = getNavEntry(locationId)
+    if (!entry) return fail('open-system-location', T, `Unknown location: ${locationId}`)
+
+    const result = await launchSystemLocation(entry)
+    return result.ok
+      ? ok('open-system-location', T, `Opened ${entry.description}`)
+      : fail('open-system-location', T, result.error || `Failed to open ${entry.description}`)
+  },
+
   // ── Browser enrichment actions ──────────────────────────────────────────
 
   'browser-url': async () => {
@@ -250,6 +282,155 @@ export const safeHandlers: Record<string, ActionHandler> = {
     if (!text) return fail('browser-selected-text', T, 'No selected text found via UI Automation')
     return ok('browser-selected-text', T, text)
   },
+
+  // ── Terminal bridge actions ──────────────────────────────────────────────
+
+  'terminal-read-buffer': async () => {
+    const win = await getActiveWindowAsync()
+    if (!win) return fail('terminal-read-buffer', T, 'No active window')
+    const session = resolveTerminalSession(win)
+    if (!session) return fail('terminal-read-buffer', T, 'Active window is not a terminal')
+    const mainWin = BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) || null
+    const buffer = await readTerminalBuffer(session, mainWin)
+    return ok('terminal-read-buffer', T, JSON.stringify(buffer))
+  },
+
+  'terminal-get-cwd': async () => {
+    const win = await getActiveWindowAsync()
+    if (!win) return fail('terminal-get-cwd', T, 'No active window')
+    const session = resolveTerminalSession(win)
+    if (!session) return fail('terminal-get-cwd', T, 'Active window is not a terminal')
+
+    const projectInfo = session.titleCwd ? findProjectRoot(session.titleCwd) : null
+
+    return ok('terminal-get-cwd', T, JSON.stringify({
+      cwd: session.titleCwd,
+      projectRoot: projectInfo?.root || null,
+      shell: session.shell,
+      pid: session.pid,
+      source: session.titleCwd ? 'title' : null,
+    }))
+  },
+
+  'terminal-list-processes': async () => {
+    const win = await getActiveWindowAsync()
+    if (!win) return fail('terminal-list-processes', T, 'No active window')
+    const session = resolveTerminalSession(win)
+    if (!session) return fail('terminal-list-processes', T, 'Active window is not a terminal')
+    const procs = await getTerminalProcesses(session.pid, session.shell, session.titleCwd)
+    return ok('terminal-list-processes', T, JSON.stringify(procs))
+  },
+
+  'terminal-tail-logs': async (params) => {
+    const result = await tailLogs({
+      path: params.path ? String(params.path) : undefined,
+      cwd: params.cwd ? String(params.cwd) : undefined,
+      lines: typeof params.lines === 'number' ? params.lines : undefined,
+      pattern: params.pattern ? String(params.pattern) : undefined,
+    })
+    return ok('terminal-tail-logs', T, JSON.stringify(result))
+  },
+
+  'terminal-list-scripts': async (params) => {
+    let cwd = params.cwd ? String(params.cwd) : null
+    if (!cwd) {
+      const win = await getActiveWindowAsync()
+      if (win) {
+        const session = resolveTerminalSession(win)
+        cwd = session?.titleCwd || null
+      }
+    }
+    if (!cwd) return fail('terminal-list-scripts', T, 'No cwd available')
+    const scripts = detectScripts(cwd)
+    return ok('terminal-list-scripts', T, JSON.stringify(scripts))
+  },
+
+  'terminal-parse-stacktrace': async (params) => {
+    let text = String(params.text ?? '')
+
+    if (text === 'auto') {
+      const win = await getActiveWindowAsync()
+      if (!win) return fail('terminal-parse-stacktrace', T, 'No active window')
+      const session = resolveTerminalSession(win)
+      if (!session) return fail('terminal-parse-stacktrace', T, 'Active window is not a terminal')
+      const mainWin = BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) || null
+      const buffer = await readTerminalBuffer(session, mainWin)
+      text = buffer.lines.join('\n')
+    }
+
+    if (!text) return fail('terminal-parse-stacktrace', T, 'No text to parse')
+    const cwd = params.cwd ? String(params.cwd) : undefined
+    const result = parseStackTrace(text, cwd)
+    return ok('terminal-parse-stacktrace', T, JSON.stringify(result))
+  },
+
+  'terminal-git-status': async (params) => {
+    const cwd = await resolveCwd(params.cwd)
+    if (!cwd) return fail('terminal-git-status', T, 'No cwd available')
+    const status = await getGitStatus(cwd)
+    if (!status) return fail('terminal-git-status', T, 'Not a git repository')
+    return ok('terminal-git-status', T, JSON.stringify(status))
+  },
+
+  'terminal-git-diff': async (params) => {
+    const cwd = await resolveCwd(params.cwd)
+    if (!cwd) return fail('terminal-git-diff', T, 'No cwd available')
+    const diff = await getGitDiff(cwd, {
+      staged: params.staged === true ? true : undefined,
+      file: params.file ? String(params.file) : undefined,
+    })
+    if (!diff) return fail('terminal-git-diff', T, 'Not a git repository')
+    return ok('terminal-git-diff', T, JSON.stringify(diff))
+  },
+
+  'terminal-git-log': async (params) => {
+    const cwd = await resolveCwd(params.cwd)
+    if (!cwd) return fail('terminal-git-log', T, 'No cwd available')
+    const count = typeof params.count === 'number' ? params.count : 10
+    const log = await getGitLog(cwd, count)
+    if (!log) return fail('terminal-git-log', T, 'Not a git repository')
+    return ok('terminal-git-log', T, JSON.stringify(log))
+  },
+
+  'terminal-error-packet': async () => {
+    const win = await getActiveWindowAsync()
+    if (!win) return fail('terminal-error-packet', T, 'No active window')
+    const session = resolveTerminalSession(win)
+    if (!session) return fail('terminal-error-packet', T, 'Active window is not a terminal')
+    const mainWin = BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) || null
+    const buffer = await readTerminalBuffer(session, mainWin)
+    const packet = await buildErrorPacket(buffer.lines, session.titleCwd)
+    return ok('terminal-error-packet', T, JSON.stringify(packet))
+  },
+
+  // ── IDE bridge actions (safe) ────────────────────────────────────────────
+
+  'ide-get-state': async () => {
+    const win = await getActiveWindowAsync()
+    if (!win) return fail('ide-get-state', T, 'No active window')
+    const state = getIdeState(win)
+    if (!state) return fail('ide-get-state', T, 'Active window is not an IDE')
+    return ok('ide-get-state', T, JSON.stringify(state))
+  },
+
+  'ide-read-selection': async () => {
+    const win = await getActiveWindowAsync()
+    if (!win) return fail('ide-read-selection', T, 'No active window')
+    const sel = await readIdeSelection(win)
+    return ok('ide-read-selection', T, JSON.stringify(sel))
+  },
+}
+
+/** Resolve cwd from params or active terminal session. */
+async function resolveCwd(cwdParam: unknown): Promise<string | null> {
+  if (cwdParam) return String(cwdParam)
+  const win = await getActiveWindowAsync()
+  if (!win) return null
+  const session = resolveTerminalSession(win)
+  if (session?.titleCwd) return session.titleCwd
+  // Try IDE workspace
+  const state = getIdeState(win)
+  return state?.workspacePath || null
 }
 
 /** Resolve the URL param: use explicit url if provided, otherwise extract from browser. */

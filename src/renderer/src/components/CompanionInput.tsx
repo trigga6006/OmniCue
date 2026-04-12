@@ -1,5 +1,5 @@
 import { memo, useState, useRef, useCallback, useEffect } from 'react'
-import { ArrowUp, Square, Camera } from 'lucide-react'
+import { ArrowUp, Square, Camera, ScanLine } from 'lucide-react'
 import { useCompanionStore } from '@/stores/companionStore'
 import { sendCompanionMessage } from '@/lib/sendMessage'
 
@@ -9,6 +9,7 @@ interface CompanionInputProps {
 
 export const CompanionInput = memo(function CompanionInput({ onClose }: CompanionInputProps) {
   const [text, setText] = useState('')
+  const [isCapturing, setIsCapturing] = useState(false)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const isStreaming = useCompanionStore((s) => s.isStreaming)
   const sessionId = useCompanionStore((s) => s.sessionId)
@@ -45,9 +46,26 @@ export const CompanionInput = memo(function CompanionInput({ onClose }: Companio
   }, [sessionId])
 
   const handleManualCapture = useCallback(async () => {
-    const result = await window.electronAPI.captureActiveWindow()
-    if (result) useCompanionStore.getState().setPendingScreenshot(result)
-  }, [])
+    if (isCapturing) return
+    setIsCapturing(true)
+    try {
+      const result = await window.electronAPI.captureActiveWindow()
+      if (result) useCompanionStore.getState().setPendingScreenshot(result)
+    } finally {
+      setIsCapturing(false)
+    }
+  }, [isCapturing])
+
+  const handleRegionCapture = useCallback(async () => {
+    if (isCapturing) return
+    setIsCapturing(true)
+    try {
+      const result = await window.electronAPI.captureRegion()
+      if (result) useCompanionStore.getState().setPendingScreenshot(result)
+    } finally {
+      setIsCapturing(false)
+    }
+  }, [isCapturing])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -63,15 +81,29 @@ export const CompanionInput = memo(function CompanionInput({ onClose }: Companio
 
   return (
     <div className="flex items-center gap-2 px-3 py-2">
-      <button
-        onClick={handleManualCapture}
-        className="w-7 h-7 flex items-center justify-center rounded-full
-          text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]
-          transition-colors cursor-pointer shrink-0"
-        title="Capture screen"
-      >
-        <Camera size={14} />
-      </button>
+      <div className="flex items-center shrink-0 rounded-full border border-[var(--g-line)]">
+        <button
+          onClick={handleManualCapture}
+          disabled={isCapturing}
+          className="w-7 h-7 flex items-center justify-center rounded-l-full
+            text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]
+            transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default"
+          title="Capture full screen"
+        >
+          <Camera size={13} />
+        </button>
+        <div className="w-px h-4 bg-[var(--g-line)]" />
+        <button
+          onClick={handleRegionCapture}
+          disabled={isCapturing}
+          className="w-7 h-7 flex items-center justify-center rounded-r-full
+            text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]
+            transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default"
+          title="Capture region"
+        >
+          <ScanLine size={13} />
+        </button>
+      </div>
 
       <textarea
         ref={inputRef}

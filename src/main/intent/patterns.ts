@@ -1,6 +1,7 @@
 import { isAbsolute, join } from 'path'
 import type { DesktopSnapshot } from '../context/types'
 import type { ActionPlan, IntentPattern } from './types'
+import { lookupNavigation } from '../navigation'
 
 function parseDelaySeconds(amountText: string, unitText: string): number | null {
   const amount = Number.parseInt(amountText, 10)
@@ -44,6 +45,30 @@ function buildPlan(plan: ActionPlan): ActionPlan {
 }
 
 export const PATTERNS: IntentPattern[] = [
+  // ── System navigation (high priority) ───────────────────────────────────
+  {
+    id: 'navigate-to-system',
+    priority: 30,
+    patterns: [
+      /^(?:take\s+me\s+to|go\s+to|open|show(?:\s+me)?|pull\s+up|bring\s+up|launch)\s+(?:the\s+)?(.+?)(?:\s+settings?|\s+options?|\s+preferences?)?$/i,
+      /^(?:open|show|go\s+to)\s+(?:the\s+)?(.+?)\s+(?:settings?|options?|preferences?|config(?:uration)?)/i,
+      /^where(?:'s|\s+is|\s+are)\s+(?:the\s+)?(.+?)(?:\s+settings?)?[?]?$/i,
+    ],
+    resolve: (match) => {
+      const query = match[1]?.trim()
+      if (!query) return null
+
+      const result = lookupNavigation(query)
+      if (!result || result.confidence < 0.85) return null
+
+      return buildPlan({
+        actions: [{ actionId: 'open-system-location', params: { locationId: result.entry.id } }],
+        explanation: result.entry.description,
+        confidence: result.confidence,
+      })
+    },
+  },
+  // ── Project / file navigation ───────────────────────────────────────────
   {
     id: 'open-project-folder',
     patterns: [

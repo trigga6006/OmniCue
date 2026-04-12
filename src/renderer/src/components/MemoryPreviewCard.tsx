@@ -25,12 +25,9 @@ function timeAgoShort(timestamp: number): string {
 export const MemoryPreviewCard = memo(function MemoryPreviewCard({
   capsule,
   isCurrentConversation,
-  liveContext,
   onClear,
   onPin,
 }: MemoryPreviewCardProps) {
-  const _liveContext = liveContext // kept for future use by the graft, not shown in UI
-
   return (
     <div
       className="bg-[rgba(20,20,25,0.95)] border border-[rgba(255,255,255,0.12)]

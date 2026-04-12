@@ -98,9 +98,9 @@ export const CompanionMessage = memo(function CompanionMessage({
   }
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-2`}>
+    <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} mb-2 group/msg`}>
       <div
-        className={`group/msg min-w-0 max-w-[85%] overflow-hidden px-3 py-2 rounded-2xl text-[13px] leading-relaxed ${
+        className={`min-w-0 max-w-[85%] overflow-hidden px-3 py-2 rounded-2xl text-[13px] leading-relaxed ${
           isUser
             ? 'bg-[var(--g-bg-active)] text-[var(--g-text-bright)]'
             : 'bg-[var(--g-bg)] text-[var(--g-text-primary)]'
@@ -145,42 +145,42 @@ export const CompanionMessage = memo(function CompanionMessage({
         )}
         {/* Still-thinking indicator — shows after token stall while streaming */}
         {stalled && <StallIndicator />}
-        {/* Copy button — assistant messages only, visible on hover */}
-        {!isUser && message.content && !isStreaming && (
-          <div className="flex justify-start mt-1 -mb-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-150">
-            <button
-              onClick={handleCopy}
-              className="flex items-center gap-1 text-[10px] text-[var(--g-text-secondary)] hover:text-[var(--g-text-primary)] transition-colors cursor-pointer bg-transparent border-none p-0"
-              title="Copy to clipboard"
-            >
-              <AnimatePresence mode="wait">
-                {copied ? (
-                  <motion.span
-                    key="check"
-                    initial={{ scale: 0.6, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.6, opacity: 0 }}
-                    transition={{ duration: 0.15 }}
-                  >
-                    <Check size={11} strokeWidth={2.5} className="text-green-400" />
-                  </motion.span>
-                ) : (
-                  <motion.span
-                    key="copy"
-                    initial={{ scale: 0.6, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    exit={{ scale: 0.6, opacity: 0 }}
-                    transition={{ duration: 0.15 }}
-                  >
-                    <Copy size={11} strokeWidth={2} />
-                  </motion.span>
-                )}
-              </AnimatePresence>
-              <span>{copied ? 'Copied' : 'Copy'}</span>
-            </button>
-          </div>
-        )}
       </div>
+      {/* Copy button — below bubble, bottom-left, icon always visible, label on hover */}
+      {!isUser && message.content && !isStreaming && (
+        <button
+          onClick={handleCopy}
+          className="group/copy flex items-center gap-1 mt-0.5 ml-1 text-[var(--g-text-secondary)] hover:text-[var(--g-text-primary)] transition-colors cursor-pointer bg-transparent border-none p-0.5"
+          title="Copy to clipboard"
+        >
+          <AnimatePresence mode="wait">
+            {copied ? (
+              <motion.span
+                key="check"
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.6, opacity: 0 }}
+                transition={{ duration: 0.15 }}
+              >
+                <Check size={12} strokeWidth={2.5} className="text-green-400" />
+              </motion.span>
+            ) : (
+              <motion.span
+                key="copy"
+                initial={{ scale: 0.6, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.6, opacity: 0 }}
+                transition={{ duration: 0.15 }}
+              >
+                <Copy size={12} strokeWidth={2} className="opacity-50 group-hover/copy:opacity-100 transition-opacity" />
+              </motion.span>
+            )}
+          </AnimatePresence>
+          <span className="text-[10px] opacity-0 group-hover/copy:opacity-100 transition-opacity duration-150">
+            {copied ? 'Copied' : 'Copy'}
+          </span>
+        </button>
+      )}
     </div>
   )
 })

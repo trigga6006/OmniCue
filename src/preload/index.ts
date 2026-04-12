@@ -76,9 +76,8 @@ const electronAPI = {
   moveWindowBy: (dx: number, dy: number): void => {
     ipcRenderer.send('move-window-by', { dx, dy })
   },
-  requestWindowResize: (width: number, height: number): void => {
-    ipcRenderer.send('request-window-resize', { width, height })
-  },
+  requestWindowResize: (width: number, height: number): Promise<void> =>
+    ipcRenderer.invoke('request-window-resize', { width, height }),
   setWindowBounds: (bounds: { x: number; y: number; width: number; height: number }): void => {
     ipcRenderer.send('set-window-bounds', bounds)
   },
@@ -93,6 +92,8 @@ const electronAPI = {
     ipcRenderer.invoke('capture-active-window', displayId),
   getOcrResult: (ocrId: number): Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null> =>
     ipcRenderer.invoke('get-ocr-result', ocrId),
+  captureRegion: (): Promise<{ image: string; title: string; ocrId: number } | null> =>
+    ipcRenderer.invoke('capture-region'),
   sendAiMessage: (payload: {
     messages: unknown[]
     sessionId: string

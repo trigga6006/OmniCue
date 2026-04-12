@@ -180,6 +180,12 @@ export const idePack: ToolPack = {
       )
     }
 
+    // Bridge-powered actions
+    actions.push(
+      { id: 'explain-selection', label: 'Explain selection', prompt: 'Explain the code I have selected in my editor.', icon: 'FileText' },
+      { id: 'review-diff', label: 'Review my changes', prompt: 'Show and review my uncommitted changes to this file.', icon: 'GitBranch' },
+    )
+
     return actions
   },
 

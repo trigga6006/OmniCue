@@ -14,6 +14,7 @@ import { ConversationList } from './ConversationList'
 import { NotesList } from './NotesList'
 import { PANEL_SIZES } from '@/lib/constants'
 import { preferLargerPanelSize, resolvePanelSize } from '@/lib/resolvePanelSize'
+import { releasePanelOpenTransition, releasePanelSizeTransition } from '@/stores/companionStore'
 
 interface CompanionPanelProps {
   visible: boolean
@@ -64,7 +65,7 @@ export const CompanionPanel = memo(function CompanionPanel({
     const state = useCompanionStore.getState()
     const nextSize = preferLargerPanelSize(state.panelSizeMode, resolvePanelSize(content))
     if (nextSize !== state.panelSizeMode) {
-      state.setPanelSizeMode(nextSize)
+      state.transitionPanelSize(nextSize)
     }
   }, [])
 
@@ -151,11 +152,26 @@ export const CompanionPanel = memo(function CompanionPanel({
               top: anchorY + 56,
               left: '50%',
               transform: 'translateX(-50%)',
+              width: sizeConfig.panelW,
+              maxHeight: sizeConfig.panelMaxH + 140,
+              willChange: 'transform, opacity',
+              transition: 'width 0.3s cubic-bezier(0.25, 0.1, 0.25, 1), max-height 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)',
             }}
-            initial={{ y: -16, opacity: 0, scale: 0.96, width: sizeConfig.panelW, maxHeight: sizeConfig.panelMaxH + 140 }}
-            animate={{ y: 0, opacity: 1, scale: 1, width: sizeConfig.panelW, maxHeight: sizeConfig.panelMaxH + 140 }}
+            initial={{ y: -16, opacity: 0, scale: 0.96 }}
+            animate={{ y: 0, opacity: 1, scale: 1 }}
             exit={{ y: -16, opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
+            onAnimationComplete={() => {
+              releasePanelOpenTransition()
+              window.dispatchEvent(new Event('republish-interactive-regions'))
+            }}
+            onTransitionEnd={(e) => {
+              // Only the outer shell's width transition should release size suppression.
+              if (e.target !== e.currentTarget) return
+              if (e.propertyName === 'width') {
+                releasePanelSizeTransition()
+              }
+            }}
             data-interactive
           >
             {/* Header */}
@@ -170,7 +186,7 @@ export const CompanionPanel = memo(function CompanionPanel({
               <div className="flex items-center gap-1">
                 {panelSizeMode !== 'large' && (
                   <button
-                    onClick={() => useCompanionStore.getState().setPanelSizeMode('large')}
+                    onClick={() => useCompanionStore.getState().transitionPanelSize('large')}
                     className="w-6 h-6 flex items-center justify-center rounded-md
                       text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]
                       transition-colors cursor-pointer"
@@ -181,7 +197,7 @@ export const CompanionPanel = memo(function CompanionPanel({
                 )}
                 {panelSizeMode !== 'compact' && (
                   <button
-                    onClick={() => useCompanionStore.getState().setPanelSizeMode('compact')}
+                    onClick={() => useCompanionStore.getState().transitionPanelSize('compact')}
                     className="w-6 h-6 flex items-center justify-center rounded-md
                       text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]
                       transition-colors cursor-pointer"
@@ -236,11 +252,13 @@ export const CompanionPanel = memo(function CompanionPanel({
             </div>
 
             {/* Messages or Conversation List */}
-            <motion.div
+            <div
               ref={scrollRef}
               className="flex-1 overflow-y-auto min-h-[120px]"
-              animate={{ maxHeight: sizeConfig.panelMaxH }}
-              transition={{ duration: 0.3, ease: [0.25, 0.1, 0.25, 1] }}
+              style={{
+                maxHeight: sizeConfig.panelMaxH,
+                transition: 'max-height 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)',
+              }}
             >
               {showNotesList ? (
                 <NotesList />
@@ -272,7 +290,7 @@ export const CompanionPanel = memo(function CompanionPanel({
                   ))}
                 </div>
               )}
-            </motion.div>
+            </div>
 
             {/* Screenshot chip */}
             {pendingScreenshot && (

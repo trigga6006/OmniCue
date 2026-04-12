@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { AnimatePresence, LayoutGroup } from 'motion/react'
+import { AnimatePresence } from 'motion/react'
 import { MorphingPill } from '@/components/MorphingPill'
 import { ContextMenu } from '@/components/ContextMenu'
 import { HistoryPanel } from '@/components/HistoryPanel'
@@ -15,7 +15,7 @@ import { useBrightnessSampler } from '@/hooks/useBrightnessSampler'
 import { FullScreenAlert } from '@/components/FullScreenAlert'
 import { CompanionPanel } from '@/components/CompanionPanel'
 import { useCompanionStore } from '@/stores/companionStore'
-import { PANEL_SIZES } from '@/lib/constants'
+import { suppressRegionPublish } from '@/hooks/useClickThrough'
 import type { AppNotification, ActiveTimer } from '@/lib/types'
 
 // Bar top offset inside the window (px from top edge)
@@ -41,7 +41,6 @@ export default function App() {
   const addHistoryLocal = useHistoryStore((s) => s.addLocal)
 
   const companionVisible = useCompanionStore((s) => s.visible)
-  const panelSizeMode = useCompanionStore((s) => s.panelSizeMode)
 
   const [contextMenu, setContextMenu] = useState({ x: 0, y: 0, visible: false })
   const [showHistory, setShowHistory] = useState(false)
@@ -59,6 +58,7 @@ export default function App() {
   const posRef = useRef(pos)
   posRef.current = pos
   const lastHeight = useRef(BASE_HEIGHT)
+  const wasCompanionVisible = useRef(false)
 
   // --- Initialization ---
   useEffect(() => {
@@ -178,17 +178,40 @@ export default function App() {
   }, [showHistory, showSettings])
 
   useEffect(() => {
-    if (companionVisible) {
-      const config = PANEL_SIZES[panelSizeMode]
-      window.electronAPI.requestWindowResize(config.windowW, config.windowH)
-    } else {
+    const justClosed = !companionVisible && wasCompanionVisible.current
+    wasCompanionVisible.current = companionVisible
+
+    // Companion open and size transitions are fully handled by the store
+    // (open() and transitionPanelSize()). This effect only handles:
+    // 1. Delayed window shrink after the companion exit animation
+    // 2. Non-companion panel height changes (history/settings)
+    let closeTimerId: ReturnType<typeof setTimeout> | null = null
+    let closeRelease: (() => void) | null = null
+
+    if (!companionVisible) {
       const height = (showHistory || showSettings) ? PANEL_HEIGHT : BASE_HEIGHT
-      if (height !== lastHeight.current) {
+      if (justClosed) {
+        // Delay resize so the 300ms exit animation finishes smoothly
+        closeRelease = suppressRegionPublish()
+        closeTimerId = setTimeout(() => {
+          if (useCompanionStore.getState().visible) {
+            closeRelease?.()
+            return
+          }
+          lastHeight.current = height
+          window.electronAPI.requestWindowResize(WIN_WIDTH, height).then(() => closeRelease?.())
+        }, 350)
+      } else if (height !== lastHeight.current) {
         lastHeight.current = height
         window.electronAPI.requestWindowResize(WIN_WIDTH, height)
       }
     }
-  }, [showHistory, showSettings, companionVisible, panelSizeMode])
+
+    return () => {
+      if (closeTimerId) clearTimeout(closeTimerId)
+      if (closeRelease) closeRelease()
+    }
+  }, [showHistory, showSettings, companionVisible])
 
   // --- Drag: move the BrowserWindow itself ---
   const handleGripMouseDown = useCallback((e: React.MouseEvent) => {
@@ -279,7 +302,7 @@ export default function App() {
   // The BrowserWindow itself is positioned so this maps to the correct screen location.
   return (
     <div className="w-full h-full pointer-events-none select-none">
-      <LayoutGroup>
+      <>
         <div
           className="fixed flex items-center justify-center pointer-events-none"
           style={{
@@ -340,7 +363,7 @@ export default function App() {
           anchorX={Math.round(window.innerWidth / 2)}
           anchorY={BAR_TOP}
         />
-      </LayoutGroup>
+      </>
     </div>
   )
 }

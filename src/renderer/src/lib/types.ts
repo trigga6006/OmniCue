@@ -333,13 +333,14 @@ export interface ElectronAPI {
   setPanelOpen: (open: boolean) => void
   setInteractiveRegions: (regions: { x: number; y: number; width: number; height: number }[]) => void
   moveWindowBy: (dx: number, dy: number) => void
-  requestWindowResize: (width: number, height: number) => void
+  requestWindowResize: (width: number, height: number) => Promise<void>
   setWindowBounds: (bounds: { x: number; y: number; width: number; height: number }) => void
   getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   getPrimaryDisplayBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   sendTestAlert: () => void
   captureActiveWindow: (displayId?: number) => Promise<{ image: string; title: string; activeApp: string; processName: string; clipboardText: string; ocrId: number; packId?: string; packName?: string; packConfidence?: number; packContext?: Record<string, string>; packVariant?: string } | null>
   getOcrResult: (ocrId: number) => Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>
+  captureRegion: () => Promise<{ image: string; title: string; ocrId: number } | null>
   sendAiMessage: (payload: { messages: unknown[]; sessionId: string; provider?: string; resumeMode?: 'normal' | 'replay-seed'; conversationId?: string }) => Promise<{ ok: boolean }>
   abortAiStream: (sessionId: string) => void
   cleanupAiSession: (sessionId: string) => void

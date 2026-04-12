@@ -13,6 +13,7 @@ import { getCodexStatus } from './codex-auth'
 import { getClaudeStatus } from './claude-auth'
 import { getActiveWindowCached } from './activeWindow'
 import { getCurrentDisplayId, captureDisplayDataUrl } from './desktop-tools'
+import { captureRegion } from './regionCapture'
 import { executeAction, ACTION_REGISTRY, getActionDefinition } from './actions'
 import { resolveIntent } from './intent/resolver'
 import { listNotes as listWorkspaceNotes, getNote as getWorkspaceNote, deleteNote as deleteWorkspaceNote } from './workspace-notes'
@@ -164,10 +165,12 @@ export function registerIpcHandlers(): void {
     win.setBounds({ x: b.x + delta.dx, y: b.y + delta.dy, width: b.width, height: b.height })
   })
 
-  ipcMain.on('request-window-resize', (event, size: { width: number; height: number }) => {
+  ipcMain.handle('request-window-resize', (event, size: { width: number; height: number }) => {
     const win = BrowserWindow.fromWebContents(event.sender)
     if (!win) return
     const b = win.getBounds()
+    // Skip if already at requested size
+    if (b.width === size.width && b.height === size.height) return
     // Keep top-center stable during resize
     const newX = Math.round(b.x + (b.width - size.width) / 2)
     win.setBounds({ x: newX, y: b.y, width: size.width, height: size.height })
@@ -443,6 +446,44 @@ export function registerIpcHandlers(): void {
     const result = await promise
     pendingOcr.delete(ocrId)
     return result
+  })
+
+  ipcMain.handle('capture-region', async (event): Promise<{
+    image: string
+    title: string
+    ocrId: number
+  } | null> => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const wasVisible = !!(win && !win.isDestroyed() && win.isVisible())
+    try {
+      // Hide the main window before showing the overlay so it doesn't
+      // appear through the transparent dim, and stays hidden for the capture.
+      if (wasVisible && win) {
+        win.hide()
+        await new Promise((r) => setTimeout(r, 100))
+      }
+
+      const result = await captureRegion(win)
+
+      if (!result) return null
+
+      const title = 'Region capture'
+      const ocrId = ++ocrCounter
+      pendingOcr.set(
+        ocrId,
+        extractTextFromScreenshot(result.image, title)
+          .then((r) => ({ ocrText: r.text, screenType: r.screenType, ocrDurationMs: r.durationMs }))
+          .catch(() => null)
+      )
+
+      return { image: result.image, title, ocrId }
+    } catch {
+      return null
+    } finally {
+      if (wasVisible && win && !win.isDestroyed()) {
+        win.showInactive()
+      }
+    }
   })
 
   // Track the most recent tool use per session for capsule updates

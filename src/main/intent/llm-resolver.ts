@@ -12,6 +12,7 @@ import type { ResumeCapsule } from '../session-memory/types'
 import type { ActionPlan, NormalizedIntent, GroundedReferent } from './types'
 import { ACTION_REGISTRY, getActionDefinition } from '../actions'
 import { singleShotCompletion } from './intent-ai'
+import { getNavCatalogCompact } from '../navigation'
 
 // ── Prompt builder ───────────────────────────────────────────────────────────
 
@@ -64,6 +65,9 @@ function buildPrompt(
     '',
     'Pre-resolved referent candidates:',
     buildReferentsList(referents),
+    '',
+    'System locations (valid locationId values for open-system-location):',
+    getNavCatalogCompact(),
     '',
   ]
 

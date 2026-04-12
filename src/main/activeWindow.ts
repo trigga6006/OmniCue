@@ -12,6 +12,8 @@ export interface ActiveWindowInfo {
   activeApp: string      // e.g. "Visual Studio Code"
   processName: string    // e.g. "Code"
   windowTitle: string    // e.g. "index.ts — OmniCue — Visual Studio Code"
+  processId?: number     // foreground process PID
+  windowHandle?: number  // native HWND as number
 }
 
 // PowerShell script — must preserve real newlines for here-string (@"..."@) syntax
@@ -37,18 +39,21 @@ try {
   $p = [System.Diagnostics.Process]::GetProcessById($pid2)
   $desc = $p.MainModule.FileVersionInfo.FileDescription
   if (-not $desc) { $desc = $p.ProcessName }
-  @{t=$sb.ToString();p=$p.ProcessName;a=$desc} | ConvertTo-Json -Compress
+  @{t=$sb.ToString();p=$p.ProcessName;a=$desc;pid=[int]$pid2;hwnd=[long]$h} | ConvertTo-Json -Compress
 } catch {
-  @{t=$sb.ToString();p="unknown";a="unknown"} | ConvertTo-Json -Compress
+  @{t=$sb.ToString();p="unknown";a="unknown";pid=[int]$pid2;hwnd=[long]$h} | ConvertTo-Json -Compress
 }
 `
 
-// Write the script to a temp file once on module load
+// Legacy path constant kept for cleanup
 const SCRIPT_PATH = join(tmpdir(), 'omnicue-activewin.ps1')
 
+const SCRIPT_VERSION = '2' // bump to force re-write after schema changes
+const VERSIONED_PATH = join(tmpdir(), `omnicue-activewin-v${SCRIPT_VERSION}.ps1`)
+
 function ensureScript(): void {
-  if (!existsSync(SCRIPT_PATH)) {
-    writeFileSync(SCRIPT_PATH, PS_SCRIPT, 'utf-8')
+  if (!existsSync(VERSIONED_PATH)) {
+    writeFileSync(VERSIONED_PATH, PS_SCRIPT, 'utf-8')
   }
 }
 
@@ -64,7 +69,7 @@ export function getActiveWindow(): ActiveWindowInfo | null {
 
     const result = spawnSync('powershell', [
       '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-      '-File', SCRIPT_PATH,
+      '-File', VERSIONED_PATH,
     ], {
       encoding: 'utf-8',
       timeout: 3000,
@@ -74,13 +79,15 @@ export function getActiveWindow(): ActiveWindowInfo | null {
     const raw = (result.stdout || '').trim()
     if (!raw || result.status !== 0) return null
 
-    const parsed = JSON.parse(raw) as { t: string; p: string; a: string }
+    const parsed = JSON.parse(raw) as { t: string; p: string; a: string; pid?: number; hwnd?: number }
     if (!parsed.t && !parsed.p) return null
 
     return {
       windowTitle: parsed.t || '',
       processName: parsed.p || 'unknown',
       activeApp: parsed.a || parsed.p || 'unknown',
+      processId: typeof parsed.pid === 'number' && parsed.pid > 0 ? parsed.pid : undefined,
+      windowHandle: typeof parsed.hwnd === 'number' && parsed.hwnd > 0 ? parsed.hwnd : undefined,
     }
   } catch {
     return null
@@ -91,7 +98,8 @@ export function getActiveWindow(): ActiveWindowInfo | null {
  * Clean up the temp script file (call on app quit).
  */
 export function cleanupActiveWindowScript(): void {
-  try { unlinkSync(SCRIPT_PATH) } catch { /* best effort */ }
+  try { unlinkSync(VERSIONED_PATH) } catch { /* best effort */ }
+  try { unlinkSync(SCRIPT_PATH) } catch { /* best effort - remove legacy */ }
 }
 
 // ── Async active window detection (non-blocking) ───────────────────────────
@@ -110,7 +118,7 @@ export function getActiveWindowAsync(): Promise<ActiveWindowInfo | null> {
 
       const child = spawn('powershell', [
         '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', SCRIPT_PATH,
+        '-File', VERSIONED_PATH,
       ], {
         windowsHide: true,
         stdio: ['ignore', 'pipe', 'ignore'],
@@ -129,12 +137,14 @@ export function getActiveWindowAsync(): Promise<ActiveWindowInfo | null> {
         const raw = stdout.trim()
         if (!raw || code !== 0) { resolve(null); return }
         try {
-          const parsed = JSON.parse(raw) as { t: string; p: string; a: string }
+          const parsed = JSON.parse(raw) as { t: string; p: string; a: string; pid?: number; hwnd?: number }
           if (!parsed.t && !parsed.p) { resolve(null); return }
           resolve({
             windowTitle: parsed.t || '',
             processName: parsed.p || 'unknown',
             activeApp: parsed.a || parsed.p || 'unknown',
+            processId: typeof parsed.pid === 'number' && parsed.pid > 0 ? parsed.pid : undefined,
+            windowHandle: typeof parsed.hwnd === 'number' && parsed.hwnd > 0 ? parsed.hwnd : undefined,
           })
         } catch {
           resolve(null)

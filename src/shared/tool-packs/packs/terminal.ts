@@ -119,6 +119,18 @@ export const terminalPack: ToolPack = {
       { id: 'suggest-cmd', label: 'Suggest command', prompt: 'Suggest a useful command I could run next.', icon: 'Terminal' },
     )
 
+    // Bridge-powered actions when terminal context is available
+    if (hasError) {
+      actions.push(
+        { id: 'jump-to-error', label: 'Jump to source', prompt: 'Parse the stack trace and open the source file at the error location.', icon: 'ExternalLink' },
+      )
+    }
+
+    actions.push(
+      { id: 'review-changes', label: 'Review changes', prompt: 'Show and review my uncommitted git changes in this project.', icon: 'GitBranch' },
+      { id: 'run-tests', label: 'Run tests', prompt: 'Find and run the test script for this project.', icon: 'CheckCircle2' },
+    )
+
     return actions
   },
 

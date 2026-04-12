@@ -57,6 +57,7 @@ export type TargetType =
   | 'explicit-path'
   | 'referent'
   | 'current-context'
+  | 'system-location'
   | 'unknown'
 
 export interface NormalizedIntent {

@@ -6,6 +6,11 @@
 import { ensurePsScript, runPsScript } from './powershell'
 import { ok, fail, type ActionHandler } from './helpers'
 import { downloadFont, captureSelectedTextViaClipboardDance } from '../browser'
+import { getActiveWindowAsync } from '../activeWindow'
+import { openFileAtLine } from '../ide-bridge/navigation'
+import { parseStackTrace, getTopProjectFrame } from '../ide-bridge/stack-trace'
+import { resolveTerminalSession, readTerminalBuffer } from '../terminal-bridge'
+import { BrowserWindow } from 'electron'
 
 const T = 'guided' as const
 
@@ -264,6 +269,54 @@ export const guidedHandlers: Record<string, ActionHandler> = {
     const text = await captureSelectedTextViaClipboardDance()
     if (!text) return fail('browser-selected-text-capture', T, 'No selected text captured')
     return ok('browser-selected-text-capture', T, text)
+  },
+
+  // ── IDE bridge actions (guided) ────────────────────────────────────────
+
+  'ide-capture-selection': async () => {
+    const text = await captureSelectedTextViaClipboardDance()
+    if (!text) return fail('ide-capture-selection', T, 'No selected text captured')
+    return ok('ide-capture-selection', T, text)
+  },
+
+  'ide-open-file': async (params) => {
+    const file = String(params.file ?? '')
+    if (!file) return fail('ide-open-file', T, 'file is required')
+    const line = typeof params.line === 'number' ? params.line : undefined
+    const column = typeof params.column === 'number' ? params.column : undefined
+    const editor = params.editor ? String(params.editor) : undefined
+    const result = await openFileAtLine({ file, line, column, editor })
+    if (!result.ok) return fail('ide-open-file', T, `No supported editor CLI found`)
+    return ok('ide-open-file', T, `Opened ${file}${line ? ':' + line : ''} in ${result.editor}`)
+  },
+
+  'ide-jump-to-frame': async (params) => {
+    let text = String(params.text ?? '')
+    if (text === 'auto') {
+      const win = await getActiveWindowAsync()
+      if (!win) return fail('ide-jump-to-frame', T, 'No active window')
+      const session = resolveTerminalSession(win)
+      if (!session) return fail('ide-jump-to-frame', T, 'Active window is not a terminal')
+      const mainWin = BrowserWindow.getAllWindows().find(w => !w.isDestroyed()) || null
+      const buffer = await readTerminalBuffer(session, mainWin)
+      text = buffer.lines.join('\n')
+    }
+    if (!text) return fail('ide-jump-to-frame', T, 'No text to parse')
+
+    const cwd = params.cwd ? String(params.cwd) : undefined
+    const parsed = parseStackTrace(text, cwd)
+    const frame = getTopProjectFrame(parsed)
+    if (!frame?.file || !frame.line) {
+      return fail('ide-jump-to-frame', T, 'No project-local stack frame found')
+    }
+
+    const result = await openFileAtLine({
+      file: frame.file,
+      line: frame.line,
+      column: frame.column || undefined,
+    })
+    if (!result.ok) return fail('ide-jump-to-frame', T, 'No supported editor CLI found')
+    return ok('ide-jump-to-frame', T, `Jumped to ${frame.file}:${frame.line} in ${result.editor}`)
   },
 
   'browser-font-download': async (params) => {

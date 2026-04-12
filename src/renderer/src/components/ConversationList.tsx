@@ -103,7 +103,6 @@ export const ConversationList = memo(function ConversationList() {
         if (el) {
           const rect = el.getBoundingClientRect()
           const spaceAbove = rect.top
-          const spaceBelow = window.innerHeight - rect.bottom
           // Prefer showing above the row; fall back to below if not enough space
           if (spaceAbove > 180) {
             setTooltipPos({ top: rect.top - 4, left: rect.left, direction: 'above' })

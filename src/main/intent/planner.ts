@@ -9,6 +9,7 @@ import type { ResumeCapsule } from '../session-memory/types'
 import type { ActionPlan, NormalizedIntent, GroundedReferent } from './types'
 import { getActionDefinition } from '../actions'
 import { resolveLLM } from './llm-resolver'
+import { lookupNavigation } from '../navigation'
 
 // ── Rule table ───────────────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ const VERB_TARGET_MAP: Record<string, string> = {
   'open:explicit-path': 'reveal-in-folder',
   'open:referent': 'reveal-in-folder',        // default for "open it" — override if referent is URL
   'open:current-context': 'reveal-in-folder',
+  'open:system-location': 'open-system-location',
   'search:search-query': 'search-web',
   'search:file': 'find-file',
   'search:unknown': 'search-web',
@@ -110,6 +112,13 @@ function buildParams(
       const path = referent?.value
       if (!path) return null
       return { path }
+    }
+    case 'open-system-location': {
+      const query = intent.surfaceReferent
+      if (!query) return null
+      const result = lookupNavigation(query)
+      if (!result || result.confidence < 0.85) return null
+      return { locationId: result.entry.id }
     }
     case 'set-reminder': {
       // Reminder parsing is complex — pattern stage handles it better

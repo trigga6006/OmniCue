@@ -18,6 +18,8 @@ import {
   summarizeFonts,
   getSelectedTextViaUiAutomation,
 } from './browser'
+import { handleTerminalRoutes } from './terminal-bridge/http'
+import { handleIdeRoutes } from './ide-bridge/http'
 
 const PORT = 19191
 const HOST = '127.0.0.1'
@@ -474,6 +476,18 @@ const server = createServer(async (req, res) => {
     } catch {
       localJson(res, 500, { error: 'Failed to read selection' })
     }
+    return
+  }
+
+  // ── Terminal bridge endpoints (local-only, read-only, no CORS) ──────────
+
+  if (url?.startsWith('/terminal/') && handleTerminalRoutes(req, res, url, localJson, mainWin)) {
+    return
+  }
+
+  // ── IDE bridge endpoints (local-only, read-only, no CORS) ─────────────
+
+  if (url?.startsWith('/ide/') && handleIdeRoutes(req, res, url, localJson)) {
     return
   }
 

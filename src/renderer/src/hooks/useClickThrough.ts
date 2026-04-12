@@ -3,6 +3,30 @@ import { useEffect } from 'react'
 let initialized = false
 let lastPublishedRegions = ''
 
+// ── Region publish suppression (refcount-based) ────────────────────────────
+// Callers acquire suppression via suppressRegionPublish(), which returns a
+// one-shot release function. Region publishing is blocked while any handle
+// is outstanding. On final release, a catch-up publish fires immediately.
+let regionPublishSuppressionCount = 0
+
+export function suppressRegionPublish(): () => void {
+  regionPublishSuppressionCount += 1
+  let released = false
+
+  return () => {
+    if (released) return
+    released = true
+    regionPublishSuppressionCount = Math.max(0, regionPublishSuppressionCount - 1)
+    if (regionPublishSuppressionCount === 0) {
+      // Force a fresh publish so stale signatures don't suppress the catch-up.
+      // publishInteractiveRegions lives inside the useEffect closure, so we
+      // trigger it via the same custom event the rest of the app uses.
+      lastPublishedRegions = ''
+      window.dispatchEvent(new Event('republish-interactive-regions'))
+    }
+  }
+}
+
 interface InteractiveRegion {
   x: number
   y: number
@@ -141,7 +165,16 @@ export function useGlobalClickThrough(): void {
     let leaveTimer = 0
     let regionRafId = 0
 
+    let retryTimer = 0
+
     const publishInteractiveRegions = (): void => {
+      if (regionPublishSuppressionCount > 0) {
+        if (retryTimer) {
+          clearTimeout(retryTimer)
+          retryTimer = 0
+        }
+        return
+      }
       if (regionRafId) return
       regionRafId = requestAnimationFrame(() => {
         regionRafId = 0
@@ -150,6 +183,42 @@ export function useGlobalClickThrough(): void {
         if (nextSignature === lastPublishedRegions) return
         lastPublishedRegions = nextSignature
         window.electronAPI.setInteractiveRegions(regions)
+
+        // If we published non-empty regions and the cursor is already over
+        // an interactive element, transition to capture immediately so the
+        // first click works without requiring a mousemove.
+        if (regions.length > 0 && lastX >= 0 && lastY >= 0) {
+          if (isPointOverInteractive(lastX, lastY, false)) {
+            setMouseState('capture', true)
+          }
+        }
+
+        // If data-interactive elements exist in the DOM but regions are
+        // empty (layout not ready yet), retry until we get real geometry.
+        if (retryTimer) { clearTimeout(retryTimer); retryTimer = 0 }
+        const hasInteractiveElements = document.querySelectorAll('[data-interactive]').length > 0
+        if (hasInteractiveElements && regions.length === 0) {
+          let attempts = 0
+          const retry = (): void => {
+            retryTimer = 0
+            if (attempts++ >= 10) return // give up after ~1s
+            if (regionPublishSuppressionCount > 0) return
+            const fresh = collectInteractiveRegions()
+            if (fresh.length > 0) {
+              const sig = JSON.stringify(fresh)
+              if (sig !== lastPublishedRegions) {
+                lastPublishedRegions = sig
+                window.electronAPI.setInteractiveRegions(fresh)
+                if (lastX >= 0 && lastY >= 0 && isPointOverInteractive(lastX, lastY, false)) {
+                  setMouseState('capture', true)
+                }
+              }
+            } else {
+              retryTimer = window.setTimeout(retry, 100)
+            }
+          }
+          retryTimer = window.setTimeout(retry, 100)
+        }
       })
     }
 
@@ -177,6 +246,10 @@ export function useGlobalClickThrough(): void {
       attributeFilter: ['class', 'style', 'data-interactive'],
     })
     window.addEventListener('resize', publishInteractiveRegions)
+
+    // Components can force a region republish by dispatching this event
+    // (e.g. CompanionPanel after its enter animation completes).
+    window.addEventListener('republish-interactive-regions', publishInteractiveRegions)
 
     const handleMouseMove = (e: MouseEvent): void => {
       if (e.clientX === lastX && e.clientY === lastY) return
@@ -254,9 +327,11 @@ export function useGlobalClickThrough(): void {
       if (rafId) cancelAnimationFrame(rafId)
       if (regionRafId) cancelAnimationFrame(regionRafId)
       if (leaveTimer) clearTimeout(leaveTimer)
+      if (retryTimer) clearTimeout(retryTimer)
       mutationObserver.disconnect()
       resizeObserver.disconnect()
       window.removeEventListener('resize', publishInteractiveRegions)
+      window.removeEventListener('republish-interactive-regions', publishInteractiveRegions)
       window.electronAPI.setInteractiveRegions([])
       lastPublishedRegions = ''
       document.removeEventListener('mousemove', handleMouseMove)

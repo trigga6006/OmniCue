@@ -5,6 +5,7 @@
  */
 
 import type { IntentVerb, TargetType, NormalizedIntent } from './types'
+import { lookupNavigation } from '../navigation'
 
 // ── Verb synonym table ───────────────────────────────────────────────────────
 
@@ -206,6 +207,27 @@ export function normalize(utterance: string): NormalizedIntent {
       surfaceReferent: rest,
       destination,
       raw,
+    }
+  }
+
+  // 6b. Detect system locations (settings, utilities, special folders)
+  if (verb === 'open' || verb === 'switch' || verb === 'unknown') {
+    // Strip trailing "settings/options/preferences" for lookup, keep it as referent
+    const locationQuery = rest
+      .replace(/\b(?:the|my)\s+/gi, '')
+      .replace(/\s+(?:settings?|options?|preferences?|page)$/i, '')
+      .trim()
+    if (locationQuery) {
+      const result = lookupNavigation(locationQuery)
+      if (result && result.confidence >= 0.85) {
+        return {
+          verb: 'open',
+          targetType: 'system-location',
+          surfaceReferent: locationQuery,
+          destination,
+          raw,
+        }
+      }
     }
   }
 
