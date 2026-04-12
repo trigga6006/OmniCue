@@ -66,11 +66,68 @@ export interface HistoryEntry {
   duration: number
   completedAt: string
   type?: EntryType
+  conversationId?: string
+  provider?: string
 }
 
 export type AiProvider = 'codex' | 'claude' | 'opencode' | 'kimicode' | 'openai' | 'gemini' | 'deepseek' | 'groq' | 'mistral' | 'xai' | 'glm' | 'kimi'
 
 // ── Agent Interaction Types ──────────────────────────────────────────────────
+
+// ── Session Memory Types ─────────────────────────────────────────────────────
+
+export interface ResumeCapsule {
+  updatedAt: number
+  conversationId: string
+  provider: string
+  goal?: string
+  lastUserMessage?: string
+  lastAssistantMessage?: string
+  lastAssistantAction?: string
+  desktop: {
+    activeApp: string
+    processName: string
+    windowTitle: string
+    display?: number
+    packId?: string
+    packVariant?: string
+  }
+  context?: {
+    browser?: { pageTitle?: string; site?: string; browserFamily?: string }
+    editor?: { workspacePath?: string; openFile?: string; language?: string; projectName?: string }
+    terminal?: { cwd?: string; shell?: string; isAdmin?: boolean }
+    fileExplorer?: { currentPath?: string; folderLabel?: string }
+  }
+  pending?: {
+    waitingOn?: string
+    pendingInteractions?: Array<{ kind: string; title: string }>
+    lastToolUse?: { name: string; input?: string }
+  }
+  tags: string[]
+  summary: string
+}
+
+export interface SessionMemorySummary {
+  conversationId: string
+  title?: string
+  provider?: string
+  lastActivity: number
+  entryCount: number
+  latestSummary: string
+  latestDesktopApp: string
+  tags: string[]
+}
+
+export interface SessionMemoryQuery {
+  conversationId?: string
+  since?: number
+  tags?: string[]
+  app?: string
+  provider?: string
+  limit?: number
+  includeContext?: boolean
+  summaryOnly?: boolean
+}
 
 // ── Conversation History Types ───────────────────────────────────────────────
 
@@ -92,6 +149,7 @@ export interface StoredConversation {
   updatedAt: number
   messageCount: number
   messages: ChatMessage[]
+  resumeCapsule?: ResumeCapsule
 }
 
 // ── Agent Interaction Types ──────────────────────────────────────────────────
@@ -273,6 +331,7 @@ export interface ElectronAPI {
   sampleScreenBrightness: () => Promise<number>
   setInteractiveLock: (locked: boolean) => void
   setPanelOpen: (open: boolean) => void
+  setInteractiveRegions: (regions: { x: number; y: number; width: number; height: number }[]) => void
   moveWindowBy: (dx: number, dy: number) => void
   requestWindowResize: (width: number, height: number) => void
   setWindowBounds: (bounds: { x: number; y: number; width: number; height: number }) => void
@@ -281,7 +340,7 @@ export interface ElectronAPI {
   sendTestAlert: () => void
   captureActiveWindow: (displayId?: number) => Promise<{ image: string; title: string; activeApp: string; processName: string; clipboardText: string; ocrId: number; packId?: string; packName?: string; packConfidence?: number; packContext?: Record<string, string>; packVariant?: string } | null>
   getOcrResult: (ocrId: number) => Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>
-  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; provider?: string; resumeMode?: 'normal' | 'replay-seed' }) => Promise<{ ok: boolean }>
+  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; provider?: string; resumeMode?: 'normal' | 'replay-seed'; conversationId?: string }) => Promise<{ ok: boolean }>
   abortAiStream: (sessionId: string) => void
   cleanupAiSession: (sessionId: string) => void
   onAiStreamToken: (cb: (data: { sessionId: string; token: string }) => void) => () => void
@@ -295,6 +354,14 @@ export interface ElectronAPI {
   getClaudeStatus: () => Promise<{ authenticated: boolean; planType?: string }>
   selectFolder: () => Promise<string | null>
   openExternalUrl: (url: string) => Promise<boolean>
+
+  // ─── Session Memory ─────────────────────────────────────────────────────
+  sessionMemoryQuery: (query: SessionMemoryQuery) => Promise<unknown>
+  sessionMemoryList: () => Promise<SessionMemorySummary[]>
+  sessionMemoryCapture: (args: { conversationId: string; runtimeSessionId?: string; provider: string }) => Promise<{ ok: boolean }>
+  sessionMemoryGetCapsule: (conversationId: string) => Promise<ResumeCapsule | null>
+  sessionMemoryClear: (conversationId: string) => Promise<{ ok: boolean }>
+  desktopGetLiveContext: () => Promise<{ activeApp: string; processName: string; windowTitle: string }>
 
   // ─── Conversations ──────────────────────────────────────────────────────
   listConversations: () => Promise<ConversationSummary[]>
@@ -329,6 +396,12 @@ export interface ElectronAPI {
   // ─── App Actions ────────────────────────────────────────────────────────
   executeAction: (request: import('../../../shared/actions').ActionRequest) => Promise<import('../../../shared/actions').ActionResult>
   listActions: () => Promise<import('../../../shared/actions').ActionDefinition[]>
+  resolveIntent: (payload: string | { utterance: string; conversationId?: string }) => Promise<{
+    resolved: boolean
+    executed?: boolean
+    plan: { actions: Array<{ actionId: string; params: Record<string, unknown> }>; explanation?: string; fallback?: string; question?: string }
+    results?: unknown[]
+  }>
   onActionExecuting: (cb: (data: { actionId: string; name: string }) => void) => () => void
 }
 

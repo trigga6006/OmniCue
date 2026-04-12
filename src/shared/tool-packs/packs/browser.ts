@@ -143,6 +143,13 @@ export const browserPack: ToolPack = {
         break
     }
 
+    // Browser-enrichment actions available for all sites
+    actions.push(
+      { id: 'extract-fonts', label: 'Identify fonts', prompt: 'What fonts is this page using? Use the browser-fonts tool.', icon: 'Type' },
+      { id: 'page-structure', label: 'Page structure', prompt: 'Show me the heading structure of this page using the browser-headings tool.', icon: 'List' },
+      { id: 'extract-links', label: 'Extract links', prompt: 'List all the links on this page using the browser-links tool.', icon: 'Link' },
+    )
+
     return actions
   },
 

@@ -70,6 +70,9 @@ const electronAPI = {
   setPanelOpen: (open: boolean): void => {
     ipcRenderer.send('set-panel-open', open)
   },
+  setInteractiveRegions: (regions: Array<{ x: number; y: number; width: number; height: number }>): void => {
+    ipcRenderer.send('set-interactive-regions', regions)
+  },
   moveWindowBy: (dx: number, dy: number): void => {
     ipcRenderer.send('move-window-by', { dx, dy })
   },
@@ -95,6 +98,7 @@ const electronAPI = {
     sessionId: string
     provider?: string
     resumeMode?: 'normal' | 'replay-seed'
+    conversationId?: string
   }): Promise<{ ok: boolean }> => ipcRenderer.invoke('ai:send-message', payload),
   abortAiStream: (sessionId: string): void => {
     ipcRenderer.send('ai:abort', { sessionId })
@@ -169,6 +173,20 @@ const electronAPI = {
   renameConversation: (id: string, title: string): Promise<void> =>
     ipcRenderer.invoke('conversations:rename', id, title),
 
+  // ─── Session Memory ──────────────────────────────────────────────────────
+  sessionMemoryQuery: (query: unknown): Promise<unknown> =>
+    ipcRenderer.invoke('session-memory:query', query),
+  sessionMemoryList: (): Promise<unknown[]> =>
+    ipcRenderer.invoke('session-memory:list'),
+  sessionMemoryCapture: (args: { conversationId: string; runtimeSessionId?: string; provider: string }): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('session-memory:capture', args),
+  sessionMemoryGetCapsule: (conversationId: string): Promise<unknown> =>
+    ipcRenderer.invoke('session-memory:get-capsule', conversationId),
+  sessionMemoryClear: (conversationId: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke('session-memory:clear', conversationId),
+  desktopGetLiveContext: (): Promise<{ activeApp: string; processName: string; windowTitle: string }> =>
+    ipcRenderer.invoke('desktop:get-live-context'),
+
   // ─── Clipboard ───────────────────────────────────────────────────────────
   clipboardReadText: (): Promise<string> => ipcRenderer.invoke('clipboard:read-text'),
   clipboardWriteText: (text: string): Promise<void> => ipcRenderer.invoke('clipboard:write-text', text),
@@ -192,6 +210,12 @@ const electronAPI = {
   // ─── App Actions ─────────────────────────────────────────────────────────
   executeAction: (request: unknown): Promise<unknown> => ipcRenderer.invoke('action:execute', request),
   listActions: (): Promise<unknown[]> => ipcRenderer.invoke('action:list'),
+  resolveIntent: (payload: string | { utterance: string; conversationId?: string }): Promise<{
+    resolved: boolean
+    executed?: boolean
+    plan: { actions: Array<{ actionId: string; params: Record<string, unknown> }>; explanation?: string; fallback?: string; question?: string }
+    results?: unknown[]
+  }> => ipcRenderer.invoke('intent:resolve', payload),
   onActionExecuting: (callback: (data: { actionId: string; name: string }) => void): (() => void) => {
     const handler = (_event: unknown, data: { actionId: string; name: string }): void => callback(data)
     ipcRenderer.on('action:executing', handler)

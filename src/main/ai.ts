@@ -7,6 +7,9 @@ import Anthropic from '@anthropic-ai/sdk'
 import { settingsStore } from './store'
 import { getCodexStatus } from './codex-auth'
 import { getClaudeStatus } from './claude-auth'
+import { loadConversation } from './conversations'
+import { generateResumeGraft } from './session-memory/graft'
+import { collectSnapshot } from './context/collector'
 import {
   registerPendingRequest,
   normalizeCodexCommandApproval,
@@ -24,6 +27,8 @@ export interface AiStreamCallbacks {
 }
 
 const SYSTEM_PROMPT = `You are OmniCue, a concise desktop AI companion. Be helpful, brief, and specific. Prefer bullet points and short paragraphs over walls of text. You may use Markdown formatting: bold, italic, inline code, fenced code blocks with language tags, lists, and headers. Keep formatting purposeful and avoid unnecessary decoration for simple answers.
+
+When you need to use a tool or endpoint to answer a question, call it BEFORE writing any response text. Do not output partial labels, headers, or filler words while waiting for tool results. Fetch the data first, then write your full response.
 
 You may receive structured desktop context with each message inside <desktop-context> tags. This includes:
 - app: The application the user is currently working in (e.g. "Visual Studio Code", "Google Chrome")
@@ -66,10 +71,28 @@ When shell access is available, you can query the user's desktop through OmniCue
 - \`curl.exe -s http://127.0.0.1:19191/displays\` - list connected displays and the current one
 - \`curl.exe -s http://127.0.0.1:19191/context\` - active app and window title
 - \`curl.exe -s "http://127.0.0.1:19191/context?includeClipboard=1"\` - same, plus clipboard when needed
+- \`curl.exe -s http://127.0.0.1:19191/snapshot\` - richer desktop snapshot with parsed IDE, terminal, browser, and system context
+- \`curl.exe -s "http://127.0.0.1:19191/snapshot?includeClipboard=1"\` - richer snapshot plus clipboard
 - \`curl.exe -s http://127.0.0.1:19191/screen-text\` - OCR text from the display OmniCue is currently on
 - \`curl.exe -s "http://127.0.0.1:19191/screen-text?display=<id>"\` - OCR text from a specific display
 
-Use /screen-text for most desktop questions. Use /displays first if the user mentions another monitor. Only request clipboard when it is directly relevant.
+Use /screen-text for most desktop questions. Use /snapshot when you need structured desktop state such as the current project folder or terminal shell. Use /displays first if the user mentions another monitor. Only request clipboard when it is directly relevant.
+
+## Browser Enrichment Tools
+
+When the active window is a browser, these endpoints provide structured access to the page without needing OCR:
+
+- \`curl.exe -s http://127.0.0.1:19191/browser/url\` — current page URL from address bar
+- \`curl.exe -s http://127.0.0.1:19191/browser/page\` — full structured content (title, headings, article, links)
+- \`curl.exe -s http://127.0.0.1:19191/browser/readable\` — clean readable article text, optimized for summarization
+- \`curl.exe -s http://127.0.0.1:19191/browser/headings\` — page heading structure
+- \`curl.exe -s http://127.0.0.1:19191/browser/links\` — all links on the page
+- \`curl.exe -s http://127.0.0.1:19191/browser/fonts\` — identify all fonts used on the page
+- \`curl.exe -s http://127.0.0.1:19191/browser/selection\` — currently selected text
+
+All content endpoints accept an optional \`?url=...\` parameter to operate on a specific URL without requiring the browser to be focused.
+
+**Important: When the user asks about fonts, typography, page content, article text, or links on a webpage, call the appropriate /browser/ endpoint FIRST before writing any response text.** Do not start typing partial answers or labels — fetch the data, then respond with the results. Use /browser/readable instead of /screen-text when the user asks to summarize or analyze a webpage. Use /browser/fonts when the user asks about typography, fonts, or design of a page.
 
 ## OmniCue App Pack Tools
 
@@ -94,9 +117,21 @@ $body = @{ actionId = "clipboard-write"; params = @{ text = "hello" } } | Conver
 Invoke-RestMethod -Uri http://127.0.0.1:19191/action -Method Post -ContentType "application/json" -Body $body
 \`\`\`
 
+### Resolving natural-language desktop commands
+When the user gives a desktop command in natural language, prefer the intent endpoint first:
+\`\`\`powershell
+$body = @{ utterance = "open the folder for this project" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://127.0.0.1:19191/intent -Method Post -ContentType "application/json" -Body $body
+\`\`\`
+
+- \`/intent\` uses the current desktop snapshot plus the registered OmniCue actions to build an action plan
+- Safe actions auto-execute by default
+- Guided or dangerous actions return a plan instead of executing
+- Pass \`execute = $false\` if you want the plan without execution
+
 ### Action tiers
-- **safe** — executes immediately: clipboard-write, open-url, open-file, reveal-in-folder, save-note
-- **guided** — executes with a brief indicator: type-text, press-key, click-element, switch-app
+- **safe** — executes immediately: clipboard-write, open-url, open-file, reveal-in-folder, save-note, list-notes, get-note, delete-note, set-reminder, search-web, find-file, list-running-apps, browser-url, browser-page-content, browser-readable, browser-headings, browser-links, browser-fonts, browser-selected-text
+- **guided** — executes with a brief indicator: type-text, press-key, click-element, switch-app, browser-back, browser-forward, browser-refresh, browser-focus-address-bar, browser-copy-url, browser-selected-text-capture, browser-font-download
 - **dangerous** — requires explicit user confirmation: delete-file, send-input, submit-form
 
 ### Copy-pasteable examples (PowerShell)
@@ -127,7 +162,7 @@ $body = @{ actionId = "save-note"; params = @{ text = "Remember this"; title = "
 \`\`\`
 
 For dangerous actions, the request blocks until the user approves or denies. Check the \`ok\` field in the response.
-Use /context or /screen-text first to understand the screen before acting.
+Use /snapshot, /context, or /screen-text first to understand the screen before acting.
 
 ### Agent notes
 OmniCue stores notes as markdown under ~/OmniCue/notes/.
@@ -135,7 +170,20 @@ OmniCue stores notes as markdown under ~/OmniCue/notes/.
 - \`curl.exe -s http://127.0.0.1:19191/notes\` — list saved notes
 - \`curl.exe -s "http://127.0.0.1:19191/notes?id=<id>"\` — read a note
 
-You can also use actions: save-note, list-notes, get-note, delete-note.`
+You can also use actions: save-note, list-notes, get-note, delete-note.
+
+## Session Memory
+
+OmniCue tracks what the user was doing across conversations (active app, open files, browser tabs, agent state).
+
+- \`curl.exe -s http://127.0.0.1:19191/session-memory\` — recent session overviews
+- \`curl.exe -s "http://127.0.0.1:19191/session-memory?app=Chrome&tags=article"\` — find browser sessions
+- \`curl.exe -s "http://127.0.0.1:19191/session-memory?conversationId=<id>&limit=20"\` — detailed session timeline
+- \`curl.exe -s "http://127.0.0.1:19191/session-memory?summaryOnly=1"\` — compact list
+- \`curl.exe -s "http://127.0.0.1:19191/session-memory/capsule?conversationId=<id>"\` — resume capsule for a conversation
+- \`curl.exe -s http://127.0.0.1:19191/session-memory/sessions\` — list all tracked sessions
+
+Use session memory when the user asks to resume work, recall what they were doing, or reference something from a previous session.`
 
 function getCodexSystemPrompt(): string {
   return `${SYSTEM_PROMPT}\n\n${CODEX_INTERACTION_INSTRUCTIONS}`
@@ -293,7 +341,8 @@ class CodexAppServerClient {
     _model?: string,
     cwd?: string,
     permissions: AgentPermissions = 'read-only',
-    resumeMode: 'normal' | 'replay-seed' = 'normal'
+    resumeMode: 'normal' | 'replay-seed' = 'normal',
+    resumeGraftText?: string
   ): Promise<void> {
     await this.ensureInitialized()
 
@@ -344,6 +393,14 @@ class CodexAppServerClient {
       // For resumed conversations, prepend a transcript seed so the new thread has context
       let fullText = text
       if (resumeMode === 'replay-seed' && messages.length > 1) {
+        const parts: string[] = []
+
+        // Inject resume graft before the transcript seed if available
+        if (resumeGraftText) {
+          parts.push(resumeGraftText)
+          parts.push('')
+        }
+
         const priorMessages = messages.slice(0, -1)
         const seed = priorMessages
           .map((m) => {
@@ -354,7 +411,9 @@ class CodexAppServerClient {
             return `[${role}] ${truncated}`
           })
           .join('\n\n')
-        fullText = `Conversation so far:\n${seed}\n\nContinue this conversation. The user's next message is:\n${text}`
+        parts.push(`Conversation so far:\n${seed}`)
+        parts.push(`\nContinue this conversation. The user's next message is:\n${text}`)
+        fullText = parts.join('\n')
       }
       inputs.push({
         type: 'text',
@@ -1705,11 +1764,39 @@ export async function streamAiResponse(
   provider?: string,
   cwd?: string,
   permissions: AgentPermissions = 'read-only',
-  resumeMode: 'normal' | 'replay-seed' = 'normal'
+  resumeMode: 'normal' | 'replay-seed' = 'normal',
+  conversationId?: string
 ): Promise<void> {
   const settings = settingsStore.get()
   const resolvedProvider = provider || settings.aiProvider || 'codex'
   console.log(`[OmniCue] Provider: ${resolvedProvider}, Permissions: ${permissions}, CWD: ${cwd}`)
+
+  // ── Resume graft injection ──────────────────────────────────────────────
+  // If this is a resumed conversation with a saved capsule, generate and inject
+  // a diff-aware resume context block before provider dispatch.
+  let resumeGraftText: string | undefined
+  if (resumeMode === 'replay-seed' && conversationId) {
+    try {
+      const conversation = loadConversation(conversationId)
+      if (conversation?.resumeCapsule) {
+        const liveSnapshot = await collectSnapshot(null, { skipSystem: true })
+        const graft = generateResumeGraft(conversation.resumeCapsule, liveSnapshot)
+        resumeGraftText = graft.text
+        console.log(`[OmniCue] Resume graft generated (${graft.staleFields.length} changes)`)
+      }
+    } catch (err) {
+      console.warn('[OmniCue] Resume graft generation failed:', err)
+    }
+  }
+
+  // For non-Codex providers, inject the graft as a synthetic system message
+  // so it flows naturally through buildPrompt / message arrays.
+  if (resumeGraftText && resolvedProvider !== 'codex') {
+    messages = [
+      { role: 'system', content: resumeGraftText } as ChatMessage,
+      ...messages,
+    ]
+  }
 
   // Claude provider — try Claude Code CLI first (uses Max subscription), fall back to Anthropic API
   if (resolvedProvider === 'claude') {
@@ -1806,7 +1893,7 @@ export async function streamAiResponse(
   if (codexStatus.authenticated) {
     // Tier 1: Codex app-server (JSON-RPC subprocess) — no model override, app-server picks its own
     try {
-      await codexAppServerClient.streamSession(sessionId, messages, callbacks, abortSignal, undefined, cwd, permissions, resumeMode)
+      await codexAppServerClient.streamSession(sessionId, messages, callbacks, abortSignal, undefined, cwd, permissions, resumeMode, resumeGraftText)
       return
     } catch (appServerErr) {
       const appMsg = appServerErr instanceof Error ? appServerErr.message : String(appServerErr)

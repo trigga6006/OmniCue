@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useCallback } from 'react'
+import { memo, useState, useRef, useCallback, useEffect } from 'react'
 import { ArrowUp, Square, Camera } from 'lucide-react'
 import { useCompanionStore } from '@/stores/companionStore'
 import { sendCompanionMessage } from '@/lib/sendMessage'
@@ -12,6 +12,12 @@ export const CompanionInput = memo(function CompanionInput({ onClose }: Companio
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const isStreaming = useCompanionStore((s) => s.isStreaming)
   const sessionId = useCompanionStore((s) => s.sessionId)
+
+  // Auto-focus the textarea when the panel opens (autoFocus alone is unreliable with animations)
+  useEffect(() => {
+    const timer = setTimeout(() => inputRef.current?.focus(), 50)
+    return () => clearTimeout(timer)
+  }, [])
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim()

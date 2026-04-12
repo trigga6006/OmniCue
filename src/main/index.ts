@@ -7,8 +7,10 @@ import { startScheduler } from './scheduler'
 import { overlayState } from './overlayState'
 import { settingsStore } from './store'
 import { cleanupAllTempImages } from './ai'
-import { cacheActiveWindow, cleanupActiveWindowScript } from './activeWindow'
+import { cacheActiveWindow, cleanupActiveWindowScript, getActiveWindowAsync } from './activeWindow'
 import { cleanupActionScripts } from './actions'
+import { recordFocus } from './context/focus-history'
+import { pruneStale as pruneSessionMemory } from './session-memory/store'
 import icon from '../../resources/icon.png?asset'
 import trayIconPath from '../../resources/tray-icon.png?asset'
 
@@ -109,7 +111,6 @@ function openSettingsWindow(tab?: string): void {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#1a1a1a',
     resizable: true,
-    resizeHandleSize: 4,
     show: false,
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -184,14 +185,24 @@ function createTray(): void {
  */
 function startCursorPolling(win: BrowserWindow): void {
   const POLL_MS = 32 // ~30 fps
-  const PAD = 10 // px padding around window
+  const ENTRY_PAD = 12
   const COOLDOWN_MS = 200 // minimum time between ignore→forward transitions
   // Only check the narrow bar region when panels are closed.
-  const BAR_ZONE_HEIGHT = 72
+  const EXIT_PAD = 28
   // Extra inward padding for "exit zone" — the cursor must move further
   // OUT than the distance required to trigger entry. This prevents
   // boundary-jitter when the cursor sits right at the edge.
-  const EXIT_PAD = 24
+  const isInRegions = (
+    cursor: Electron.Point,
+    windowBounds: Electron.Rectangle,
+    pad: number
+  ): boolean =>
+    overlayState.interactiveRegions.some((region) =>
+      cursor.x >= windowBounds.x + region.x - pad &&
+      cursor.x <= windowBounds.x + region.x + region.width + pad &&
+      cursor.y >= windowBounds.y + region.y - pad &&
+      cursor.y <= windowBounds.y + region.y + region.height + pad
+    )
 
   setInterval(() => {
     if (win.isDestroyed() || !win.isVisible()) return
@@ -202,23 +213,23 @@ function startCursorPolling(win: BrowserWindow): void {
     if (focused && focused !== win) return
 
     const cursor = screen.getCursorScreenPoint()
-    const b = win.getBounds()
-    const checkHeight = overlayState.panelOpen ? b.height : BAR_ZONE_HEIGHT
+    const bounds = win.getBounds()
+    if (overlayState.interactiveRegions.length === 0) {
+      if (overlayState.isForwarding || !overlayState.isIgnoring) {
+        overlayState.isIgnoring = true
+        overlayState.isForwarding = false
+        overlayState.lastIgnoreTime = Date.now()
+        win.setIgnoreMouseEvents(true)
+      }
+      return
+    }
 
     // Entry zone — slightly padded around the window
-    const inEntryZone =
-      cursor.x >= b.x - PAD &&
-      cursor.x <= b.x + b.width + PAD &&
-      cursor.y >= b.y - PAD &&
-      cursor.y <= b.y + checkHeight + PAD
+    const inEntryZone = isInRegions(cursor, bounds, ENTRY_PAD)
 
     // Exit zone — wider margin so cursor must move further out before
     // we disable forwarding. This creates hysteresis at the boundary.
-    const inExitZone =
-      cursor.x >= b.x - EXIT_PAD &&
-      cursor.x <= b.x + b.width + EXIT_PAD &&
-      cursor.y >= b.y - EXIT_PAD &&
-      cursor.y <= b.y + checkHeight + EXIT_PAD
+    const inExitZone = isInRegions(cursor, bounds, EXIT_PAD)
 
     if (inEntryZone) {
       // Cursor is in the window zone — ensure forwarding is active so the
@@ -248,6 +259,9 @@ function startCursorPolling(win: BrowserWindow): void {
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
 app.whenReady().then(() => {
+  // Prune stale session memory on startup
+  try { pruneSessionMemory() } catch { /* best-effort */ }
+
   registerIpcHandlers()
 
   ipcMain.on('open-settings-window', (_event, tab?: string) => {
@@ -280,12 +294,15 @@ app.whenReady().then(() => {
 
     cacheActiveWindow()
     if (mainWindow && !mainWindow.isDestroyed()) {
+      const isOpening = !overlayState.panelOpen
       mainWindow.webContents.send('toggle-companion')
       if (!mainWindow.isVisible()) mainWindow.show()
       // Use forward mode so clicks pass through until cursor reaches interactive UI
       mainWindow.setIgnoreMouseEvents(true, { forward: true })
       overlayState.isIgnoring = true
       overlayState.isForwarding = true
+      // Focus the window when opening so the input textarea receives keyboard focus
+      if (isOpening) mainWindow.focus()
     }
   }
 
@@ -316,6 +333,11 @@ app.whenReady().then(() => {
     startServer(mainWindow)
     startCursorPolling(mainWindow)
   }
+
+  setInterval(() => {
+    void getActiveWindowAsync().then((info) => recordFocus(info))
+  }, 3000)
+
   // Start background scheduler for alarms and reminders
   startScheduler(() => mainWindow)
   createTray()

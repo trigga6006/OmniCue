@@ -1,6 +1,14 @@
 import { useEffect } from 'react'
 
 let initialized = false
+let lastPublishedRegions = ''
+
+interface InteractiveRegion {
+  x: number
+  y: number
+  width: number
+  height: number
+}
 
 /**
  * Current mouse-event state:
@@ -85,6 +93,18 @@ function isPointOverInteractive(x: number, y: number, padded: boolean): boolean 
   return false
 }
 
+function collectInteractiveRegions(): InteractiveRegion[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-interactive]'))
+    .map((element) => element.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0)
+    .map((rect) => ({
+      x: Math.round(rect.left),
+      y: Math.round(rect.top),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    }))
+}
+
 /**
  * Global click-through manager — three-state architecture.
  *
@@ -119,6 +139,44 @@ export function useGlobalClickThrough(): void {
     let lastX = -1
     let lastY = -1
     let leaveTimer = 0
+    let regionRafId = 0
+
+    const publishInteractiveRegions = (): void => {
+      if (regionRafId) return
+      regionRafId = requestAnimationFrame(() => {
+        regionRafId = 0
+        const regions = collectInteractiveRegions()
+        const nextSignature = JSON.stringify(regions)
+        if (nextSignature === lastPublishedRegions) return
+        lastPublishedRegions = nextSignature
+        window.electronAPI.setInteractiveRegions(regions)
+      })
+    }
+
+    const resizeObserver = new ResizeObserver(() => {
+      publishInteractiveRegions()
+    })
+
+    const observeInteractiveElements = (): void => {
+      resizeObserver.disconnect()
+      document.querySelectorAll('[data-interactive]').forEach((element) => {
+        resizeObserver.observe(element)
+      })
+      publishInteractiveRegions()
+    }
+
+    const mutationObserver = new MutationObserver(() => {
+      observeInteractiveElements()
+    })
+
+    observeInteractiveElements()
+    mutationObserver.observe(document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style', 'data-interactive'],
+    })
+    window.addEventListener('resize', publishInteractiveRegions)
 
     const handleMouseMove = (e: MouseEvent): void => {
       if (e.clientX === lastX && e.clientY === lastY) return
@@ -194,7 +252,13 @@ export function useGlobalClickThrough(): void {
 
     return () => {
       if (rafId) cancelAnimationFrame(rafId)
+      if (regionRafId) cancelAnimationFrame(regionRafId)
       if (leaveTimer) clearTimeout(leaveTimer)
+      mutationObserver.disconnect()
+      resizeObserver.disconnect()
+      window.removeEventListener('resize', publishInteractiveRegions)
+      window.electronAPI.setInteractiveRegions([])
+      lastPublishedRegions = ''
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseleave', handleMouseLeave)
       document.removeEventListener('keydown', handleKeyDown)

@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react'
 import { X } from 'lucide-react'
 import { PlusIcon, GripDots } from '@/components/PlusButton'
 import { AiIcon } from '@/components/AiButton'
+import { ActivityBubble } from '@/components/ActivityBubble'
 import { TimerPill } from '@/components/TimerPill'
 import { TimerCircleContent } from '@/components/TimerCircle'
 import { NotificationContent } from '@/components/NotificationBubble'
@@ -45,6 +46,7 @@ export const MorphingPill = memo(function MorphingPill({
   const notifications = useNotificationStore((s) => s.notifications)
   const expandedIds = useNotificationStore((s) => s.expandedIds)
   const companionVisible = useCompanionStore((s) => s.visible)
+  const isStreaming = useCompanionStore((s) => s.isStreaming)
 
   // TimerPill bare-mode callbacks
   const [timerPillWidth, setTimerPillWidth] = useState(0)
@@ -83,6 +85,9 @@ export const MorphingPill = memo(function MorphingPill({
     if (!companionVisible) {
       w += PILL_DIVIDER_W
       w += PILL_ICON_SIZE // AI sparkles icon
+      if (isStreaming) {
+        w += 4 + PILL_ICON_SIZE // gap + activity bubble
+      }
     } else {
       // Mini-bar mode: show close button instead of AI icon
       w += PILL_DIVIDER_W
@@ -90,7 +95,7 @@ export const MorphingPill = memo(function MorphingPill({
     }
 
     return w
-  }, [isCreating, timerPillWidth, timers.length, notifications, expandedIds, companionVisible])
+  }, [isCreating, timerPillWidth, timers.length, notifications, expandedIds, companionVisible, isStreaming])
 
   // Choose transition based on state
   const widthTransition = isDragging
@@ -210,7 +215,7 @@ export const MorphingPill = memo(function MorphingPill({
               {/* Divider before AI icon */}
               <PillDivider />
 
-              {/* AI icon or close button */}
+              {/* AI icon (+ activity bubble when streaming) or close button */}
               {companionVisible ? (
                 <motion.button
                   className="relative w-7 h-7 rounded-full
@@ -226,7 +231,12 @@ export const MorphingPill = memo(function MorphingPill({
                   <X size={14} strokeWidth={2.5} />
                 </motion.button>
               ) : (
-                <AiIcon />
+                <>
+                  <AiIcon />
+                  <AnimatePresence>
+                    {isStreaming && <ActivityBubble />}
+                  </AnimatePresence>
+                </>
               )}
             </>
           )}

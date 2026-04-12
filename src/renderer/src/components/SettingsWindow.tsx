@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import {
   Clock, Settings, Trash2, X, CheckCircle2, AlertCircle,
@@ -11,6 +12,7 @@ import { useHistoryStore } from '@/stores/historyStore'
 import { parseDuration } from '@/lib/parseDuration'
 import { formatTime, timeAgo, generateId } from '@/lib/utils'
 import type { EntryType, Alarm, Reminder, HistoryEntry } from '@/lib/types'
+import { MemoryPreviewCard } from './MemoryPreviewCard'
 
 type Tab = 'history' | 'settings' | 'alarms' | 'reminders' | 'ai'
 
@@ -750,6 +752,69 @@ function HistoryTab({
   entries: ReturnType<typeof useHistoryStore.getState>['entries']
   clearHistory: () => void
 }) {
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const [previewCapsule, setPreviewCapsule] = useState<import('@/lib/types').ResumeCapsule | null>(null)
+  const [previewLiveCtx, setPreviewLiveCtx] = useState<{ activeApp: string; processName: string; windowTitle: string } | null>(null)
+  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number; width: number; direction: 'above' | 'below' }>({ top: 0, left: 0, width: 280, direction: 'above' })
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const rowRefs = useRef(new Map<string, HTMLDivElement>())
+  const liveCtxFetched = useRef(false)
+
+  const cancelDismiss = useCallback(() => {
+    if (dismissTimer.current) {
+      clearTimeout(dismissTimer.current)
+      dismissTimer.current = null
+    }
+  }, [])
+
+  const handleRowEnter = useCallback(async (entry: HistoryEntry) => {
+    if (!entry.conversationId) return
+    cancelDismiss()
+    hoverTimer.current = setTimeout(async () => {
+      const capsule = await window.electronAPI.sessionMemoryGetCapsule(entry.conversationId!)
+      if (!capsule) return
+
+      if (!liveCtxFetched.current) {
+        try {
+          const ctx = await window.electronAPI.desktopGetLiveContext()
+          setPreviewLiveCtx(ctx)
+        } catch { /* ignore */ }
+        liveCtxFetched.current = true
+      }
+
+      // Calculate position
+      const el = rowRefs.current.get(entry.id)
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        if (rect.top > 180) {
+          setTooltipPos({ top: rect.top - 4, left: rect.left, width: rect.width, direction: 'above' })
+        } else {
+          setTooltipPos({ top: rect.bottom + 4, left: rect.left, width: rect.width, direction: 'below' })
+        }
+      }
+
+      setPreviewCapsule(capsule)
+      setPreviewId(entry.id)
+    }, 300)
+  }, [])
+
+  const handleRowLeave = useCallback(() => {
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+    dismissTimer.current = setTimeout(() => {
+      setPreviewId(null)
+    }, 150)
+  }, [])
+
+  const handleClearMemory = useCallback(async (conversationId: string) => {
+    await window.electronAPI.sessionMemoryClear(conversationId)
+    setPreviewId(null)
+    setPreviewCapsule(null)
+  }, [])
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
@@ -776,25 +841,70 @@ function HistoryTab({
       ) : (
         <div className="space-y-0.5">
           {entries.map((entry, i) => (
-            <motion.div
+            <div
               key={entry.id}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg
-                hover:bg-white/[0.04] transition-colors"
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.02 }}
+              ref={(el) => { if (el) rowRefs.current.set(entry.id, el); else rowRefs.current.delete(entry.id) }}
+              onMouseEnter={() => handleRowEnter(entry)}
+              onMouseLeave={handleRowLeave}
             >
-              <TypeIcon type={entry.type} />
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] text-white/70 truncate">{entry.name}</div>
-                <div className="text-[11px] text-white/30">{entrySubtitle(entry)}</div>
-              </div>
-              <div className="text-[11px] text-white/25 shrink-0">
-                {timeAgo(entry.completedAt)}
-              </div>
-            </motion.div>
+              <motion.div
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg
+                  hover:bg-white/[0.04] transition-colors"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.02 }}
+              >
+                <TypeIcon type={entry.type} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] text-white/70 truncate">{entry.name}</div>
+                  <div className="text-[11px] text-white/30">{entrySubtitle(entry)}</div>
+                </div>
+                <div className="text-[11px] text-white/25 shrink-0">
+                  {timeAgo(entry.completedAt)}
+                </div>
+              </motion.div>
+            </div>
           ))}
         </div>
+      )}
+
+      {/* Portal-based tooltip for memory preview */}
+      {createPortal(
+        <AnimatePresence>
+          {previewId && previewCapsule && (
+            <motion.div
+              className="fixed z-[9999] pointer-events-none"
+              style={{
+                left: tooltipPos.left,
+                width: tooltipPos.width,
+                ...(tooltipPos.direction === 'above'
+                  ? { bottom: window.innerHeight - tooltipPos.top }
+                  : { top: tooltipPos.top }),
+              }}
+              initial={{ opacity: 0, y: tooltipPos.direction === 'above' ? 6 : -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: tooltipPos.direction === 'above' ? 6 : -6 }}
+              transition={{ duration: 0.12 }}
+            >
+              <div
+                className="pointer-events-auto"
+                onMouseEnter={cancelDismiss}
+                onMouseLeave={handleRowLeave}
+              >
+                <MemoryPreviewCard
+                  capsule={previewCapsule}
+                  isCurrentConversation={false}
+                  liveContext={previewLiveCtx}
+                  onClear={() => {
+                    const entry = entries.find((e) => e.id === previewId)
+                    if (entry?.conversationId) handleClearMemory(entry.conversationId)
+                  }}
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
       )}
     </div>
   )

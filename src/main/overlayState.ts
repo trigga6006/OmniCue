@@ -10,6 +10,9 @@ export const overlayState = {
   /** Whether we're in forward mode (ignore + forward: clicks pass through, mouse events forwarded). */
   isForwarding: false,
 
+  /** Interactive element bounds reported by the renderer, relative to the overlay window. */
+  interactiveRegions: [] as Array<{ x: number; y: number; width: number; height: number }>,
+
   /** When true, the polling loop will not toggle back to ignore mode (e.g. during drag). */
   locked: false,
 

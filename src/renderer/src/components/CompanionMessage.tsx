@@ -1,6 +1,6 @@
-import { memo, useEffect, useRef, useState } from 'react'
-import { motion } from 'motion/react'
-import { Terminal, FileText, Search, Code, Globe } from 'lucide-react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
+import { motion, AnimatePresence } from 'motion/react'
+import { Terminal, FileText, Search, Code, Globe, Copy, Check } from 'lucide-react'
 import type { ChatMessage, ToolUseEntry } from '@/lib/types'
 import oiLogoGlass from '@/assets/oi-logo-glass.svg'
 import { MarkdownContent } from './MarkdownContent'
@@ -24,6 +24,14 @@ export const CompanionMessage = memo(function CompanionMessage({
 
   const isThinking = isStreaming && !message.content && !hasVisibleInteractions
   const isStopped = !isUser && message.content === 'Stopped.'
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = useCallback(() => {
+    if (!message.content) return
+    navigator.clipboard.writeText(message.content)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }, [message.content])
 
   // Detect token stall: content exists but no new tokens for STALL_MS
   const STALL_MS = 3000
@@ -92,7 +100,7 @@ export const CompanionMessage = memo(function CompanionMessage({
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} mb-2`}>
       <div
-        className={`min-w-0 max-w-[85%] overflow-hidden px-3 py-2 rounded-2xl text-[13px] leading-relaxed ${
+        className={`group/msg min-w-0 max-w-[85%] overflow-hidden px-3 py-2 rounded-2xl text-[13px] leading-relaxed ${
           isUser
             ? 'bg-[var(--g-bg-active)] text-[var(--g-text-bright)]'
             : 'bg-[var(--g-bg)] text-[var(--g-text-primary)]'
@@ -137,6 +145,41 @@ export const CompanionMessage = memo(function CompanionMessage({
         )}
         {/* Still-thinking indicator — shows after token stall while streaming */}
         {stalled && <StallIndicator />}
+        {/* Copy button — assistant messages only, visible on hover */}
+        {!isUser && message.content && !isStreaming && (
+          <div className="flex justify-start mt-1 -mb-0.5 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-150">
+            <button
+              onClick={handleCopy}
+              className="flex items-center gap-1 text-[10px] text-[var(--g-text-secondary)] hover:text-[var(--g-text-primary)] transition-colors cursor-pointer bg-transparent border-none p-0"
+              title="Copy to clipboard"
+            >
+              <AnimatePresence mode="wait">
+                {copied ? (
+                  <motion.span
+                    key="check"
+                    initial={{ scale: 0.6, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.6, opacity: 0 }}
+                    transition={{ duration: 0.15 }}
+                  >
+                    <Check size={11} strokeWidth={2.5} className="text-green-400" />
+                  </motion.span>
+                ) : (
+                  <motion.span
+                    key="copy"
+                    initial={{ scale: 0.6, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0.6, opacity: 0 }}
+                    transition={{ duration: 0.15 }}
+                  >
+                    <Copy size={11} strokeWidth={2} />
+                  </motion.span>
+                )}
+              </AnimatePresence>
+              <span>{copied ? 'Copied' : 'Copy'}</span>
+            </button>
+          </div>
+        )}
       </div>
     </div>
   )

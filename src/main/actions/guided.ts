@@ -5,6 +5,7 @@
 
 import { ensurePsScript, runPsScript } from './powershell'
 import { ok, fail, type ActionHandler } from './helpers'
+import { downloadFont, captureSelectedTextViaClipboardDance } from '../browser'
 
 const T = 'guided' as const
 
@@ -214,5 +215,79 @@ export const guidedHandlers: Record<string, ActionHandler> = {
     const result = await runPsScript(script, [processName])
     if (result.exitCode !== 0) return fail('switch-app', T, result.stderr || `App "${processName}" not found`)
     return ok('switch-app', T, result.stdout || `Switched to ${processName}`)
+  },
+
+  // ── Browser control actions ────────────────────────────────���────────────
+
+  'browser-back': async () => {
+    const script = ensurePsScript('press-hotkey', PS_PRESS_HOTKEY)
+    const result = await runPsScript(script, ['alt+left'])
+    if (result.exitCode !== 0) return fail('browser-back', T, result.stderr || 'Failed')
+    return ok('browser-back', T, 'Navigated back')
+  },
+
+  'browser-forward': async () => {
+    const script = ensurePsScript('press-hotkey', PS_PRESS_HOTKEY)
+    const result = await runPsScript(script, ['alt+right'])
+    if (result.exitCode !== 0) return fail('browser-forward', T, result.stderr || 'Failed')
+    return ok('browser-forward', T, 'Navigated forward')
+  },
+
+  'browser-refresh': async () => {
+    const script = ensurePsScript('press-hotkey', PS_PRESS_HOTKEY)
+    const result = await runPsScript(script, ['ctrl+r'])
+    if (result.exitCode !== 0) return fail('browser-refresh', T, result.stderr || 'Failed')
+    return ok('browser-refresh', T, 'Refreshed page')
+  },
+
+  'browser-focus-address-bar': async () => {
+    const script = ensurePsScript('press-hotkey', PS_PRESS_HOTKEY)
+    const result = await runPsScript(script, ['ctrl+l'])
+    if (result.exitCode !== 0) return fail('browser-focus-address-bar', T, result.stderr || 'Failed')
+    return ok('browser-focus-address-bar', T, 'Focused address bar')
+  },
+
+  'browser-copy-url': async () => {
+    // Ctrl+L to focus address bar, then Ctrl+C to copy, then Escape to deselect
+    const script = ensurePsScript('press-hotkey', PS_PRESS_HOTKEY)
+    let result = await runPsScript(script, ['ctrl+l'])
+    if (result.exitCode !== 0) return fail('browser-copy-url', T, 'Failed to focus address bar')
+    await new Promise(r => setTimeout(r, 150))
+    result = await runPsScript(script, ['ctrl+c'])
+    if (result.exitCode !== 0) return fail('browser-copy-url', T, 'Failed to copy URL')
+    await new Promise(r => setTimeout(r, 100))
+    await runPsScript(script, ['escape']) // best-effort deselect
+    return ok('browser-copy-url', T, 'Copied URL to clipboard')
+  },
+
+  'browser-selected-text-capture': async () => {
+    const text = await captureSelectedTextViaClipboardDance()
+    if (!text) return fail('browser-selected-text-capture', T, 'No selected text captured')
+    return ok('browser-selected-text-capture', T, text)
+  },
+
+  'browser-font-download': async (params) => {
+    const fontUrl = String(params.fontUrl ?? '').trim()
+    const destDir = String(params.destDir ?? '').trim()
+    if (!fontUrl) return fail('browser-font-download', T, 'fontUrl is required')
+    if (!destDir) return fail('browser-font-download', T, 'destDir is required')
+
+    try {
+      const family = params.family ? String(params.family) : 'font'
+      const result = await downloadFont(
+        {
+          family,
+          format: 'unknown',
+          url: fontUrl,
+          accessible: true,
+          usedOn: [],
+          isDataUri: fontUrl.startsWith('data:'),
+        },
+        destDir,
+      )
+      return ok('browser-font-download', T, JSON.stringify(result))
+    } catch (e) {
+      return fail('browser-font-download', T, `Download failed: ${e instanceof Error ? e.message : String(e)}`)
+    }
   },
 }

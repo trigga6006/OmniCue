@@ -57,6 +57,42 @@ export function runPsScript(
   })
 }
 
+/** Run an inline PowerShell command and return stdout + exit code. */
+export function runPsCommand(
+  command: string,
+  timeoutMs = 10000
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve) => {
+    const child = spawn('powershell', [
+      '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+      '-Command', command,
+    ], {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (data: Buffer) => { stdout += data.toString() })
+    child.stderr.on('data', (data: Buffer) => { stderr += data.toString() })
+
+    const timer = setTimeout(() => {
+      child.kill()
+      resolve({ stdout, stderr: stderr || 'Timed out', exitCode: 1 })
+    }, timeoutMs)
+
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode: code ?? 1 })
+    })
+
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      resolve({ stdout: '', stderr: err.message, exitCode: 1 })
+    })
+  })
+}
+
 /** Remove all cached temp scripts (call on app quit). */
 export function cleanupActionScripts(): void {
   for (const [, filePath] of scriptCache) {

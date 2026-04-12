@@ -13,13 +13,18 @@ import { getCodexStatus } from './codex-auth'
 import { getClaudeStatus } from './claude-auth'
 import { getActiveWindowCached } from './activeWindow'
 import { getCurrentDisplayId, captureDisplayDataUrl } from './desktop-tools'
-import { executeAction, ACTION_REGISTRY } from './actions'
+import { executeAction, ACTION_REGISTRY, getActionDefinition } from './actions'
+import { resolveIntent } from './intent/resolver'
 import { listNotes as listWorkspaceNotes, getNote as getWorkspaceNote, deleteNote as deleteWorkspaceNote } from './workspace-notes'
 import { resolvePack } from '../shared/tool-packs/resolver'
 import {
   listConversations, loadConversation, saveConversation,
-  deleteConversation, renameConversation,
+  deleteConversation, renameConversation, clearConversationResumeCapsule,
 } from './conversations'
+import { onUserMessage, onAssistantFinish, onInteractionRequest, captureManual } from './session-memory/collector'
+import { getSessionMemory, listSessions, deleteSessionTimeline } from './session-memory/store'
+import { collectSnapshot as collectDesktopSnapshot } from './context/collector'
+import type { SessionMemoryQuery } from './session-memory/types'
 
 const activeStreams = new Map<string, AbortController>()
 
@@ -123,6 +128,19 @@ export function registerIpcHandlers(): void {
 
   ipcMain.on('set-panel-open', (_event, open: boolean) => {
     overlayState.panelOpen = open
+  })
+
+  ipcMain.on('set-interactive-regions', (_event, regions: Array<{ x: number; y: number; width: number; height: number }>) => {
+    overlayState.interactiveRegions = Array.isArray(regions)
+      ? regions.filter((region) =>
+          Number.isFinite(region?.x) &&
+          Number.isFinite(region?.y) &&
+          Number.isFinite(region?.width) &&
+          Number.isFinite(region?.height) &&
+          region.width > 0 &&
+          region.height > 0
+        )
+      : []
   })
 
   // Legacy alias — delegates to os:open-url
@@ -427,14 +445,31 @@ export function registerIpcHandlers(): void {
     return result
   })
 
+  // Track the most recent tool use per session for capsule updates
+  const lastToolUseBySession = new Map<string, { name: string; input?: string }>()
+
   ipcMain.handle(
     'ai:send-message',
     async (
       event,
-      payload: { messages: unknown[]; sessionId: string; provider?: string; resumeMode?: 'normal' | 'replay-seed' }
+      payload: {
+        messages: unknown[]
+        sessionId: string
+        provider?: string
+        resumeMode?: 'normal' | 'replay-seed'
+        conversationId?: string
+      }
     ): Promise<{ ok: boolean }> => {
       const win = BrowserWindow.fromWebContents(event.sender)
       if (!win) return { ok: false }
+
+      const captureSessionMemorySnapshot = async () => {
+        try {
+          return await collectDesktopSnapshot(win, { skipSystem: true })
+        } catch {
+          return undefined
+        }
+      }
 
       const controller = new AbortController()
       activeStreams.set(payload.sessionId, controller)
@@ -444,6 +479,32 @@ export function registerIpcHandlers(): void {
         payload.messages as ChatMessage[],
         settings.devRootPath || ''
       )
+
+      // Capture user-message event for session memory
+      if (payload.conversationId && payload.provider) {
+        const latestUserMsg = [...(payload.messages as ChatMessage[])]
+          .reverse()
+          .find((m) => m.role === 'user')
+        if (latestUserMsg) {
+          const msgText =
+            typeof latestUserMsg.content === 'string'
+              ? latestUserMsg.content
+              : ''
+          collectDesktopSnapshot(win, { skipSystem: true })
+            .then((snapshot) => {
+              onUserMessage({
+                conversationId: payload.conversationId!,
+                runtimeSessionId: payload.sessionId,
+                provider: payload.provider!,
+                message: msgText,
+                snapshot,
+              })
+            })
+            .catch(() => {
+              /* best-effort */
+            })
+        }
+      }
 
       streamAiResponse(
         payload.sessionId,
@@ -463,9 +524,29 @@ export function registerIpcHandlers(): void {
                 sessionId: payload.sessionId,
                 fullText,
               })
+
+            // Capture assistant-finish event for session memory
+            if (payload.conversationId && payload.provider) {
+              const lastToolUse = lastToolUseBySession.get(payload.sessionId)
+              captureSessionMemorySnapshot()
+                .then((snapshot) => {
+                  onAssistantFinish({
+                    conversationId: payload.conversationId!,
+                    runtimeSessionId: payload.sessionId,
+                    provider: payload.provider!,
+                    message: fullText,
+                    lastToolUse,
+                    snapshot,
+                  })
+                })
+                .finally(() => {
+                  lastToolUseBySession.delete(payload.sessionId)
+                })
+            }
           },
           onError: (error) => {
             activeStreams.delete(payload.sessionId)
+            lastToolUseBySession.delete(payload.sessionId)
             if (!win.isDestroyed())
               win.webContents.send('ai:stream-error', {
                 sessionId: payload.sessionId,
@@ -473,6 +554,12 @@ export function registerIpcHandlers(): void {
               })
           },
           onToolUse: (toolName, toolInput) => {
+            // Track most recent tool use for capsule
+            lastToolUseBySession.set(payload.sessionId, {
+              name: toolName,
+              input: toolInput?.slice(0, 200),
+            })
+
             if (!win.isDestroyed())
               win.webContents.send('ai:tool-use', {
                 sessionId: payload.sessionId,
@@ -483,6 +570,23 @@ export function registerIpcHandlers(): void {
           onInteractionRequest: (request) => {
             if (!win.isDestroyed())
               win.webContents.send('ai:interaction-request', request)
+
+            // Capture interaction-request event for session memory
+            if (payload.conversationId && payload.provider) {
+              captureSessionMemorySnapshot()
+                .then((snapshot) => {
+                  onInteractionRequest({
+                    conversationId: payload.conversationId!,
+                    runtimeSessionId: payload.sessionId,
+                    provider: payload.provider!,
+                    interaction: { kind: request.kind, title: request.title },
+                    snapshot,
+                  })
+                })
+                .catch(() => {
+                  /* best-effort */
+                })
+            }
           },
         },
         controller.signal,
@@ -490,9 +594,11 @@ export function registerIpcHandlers(): void {
         payload.provider,
         cwd,
         settings.agentPermissions || 'read-only',
-        payload.resumeMode || 'normal'
+        payload.resumeMode || 'normal',
+        payload.conversationId
       ).catch((err) => {
         activeStreams.delete(payload.sessionId)
+        lastToolUseBySession.delete(payload.sessionId)
         if (!win.isDestroyed())
           win.webContents.send('ai:stream-error', {
             sessionId: payload.sessionId,
@@ -589,6 +695,59 @@ export function registerIpcHandlers(): void {
     renameConversation(id, title)
   })
 
+  // ─── Session Memory ─────────────────────────────────────────────────────────
+
+  ipcMain.handle('session-memory:query', (_event, query: SessionMemoryQuery) => {
+    return getSessionMemory(query)
+  })
+
+  ipcMain.handle('session-memory:list', () => {
+    return listSessions()
+  })
+
+  ipcMain.handle('session-memory:capture', async (event, args: {
+    conversationId: string
+    runtimeSessionId?: string
+    provider: string
+  }) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const snapshot = await collectDesktopSnapshot(win, { includeClipboard: true })
+    await captureManual({
+      conversationId: args.conversationId,
+      runtimeSessionId: args.runtimeSessionId,
+      provider: args.provider,
+      snapshot,
+      includeClipboard: true,
+    })
+    return { ok: true }
+  })
+
+  ipcMain.handle('session-memory:get-capsule', (_event, conversationId: string) => {
+    const conversation = loadConversation(conversationId)
+    return conversation?.resumeCapsule ?? null
+  })
+
+  ipcMain.handle('session-memory:clear', (_event, conversationId: string) => {
+    clearConversationResumeCapsule(conversationId)
+    deleteSessionTimeline(conversationId)
+    return { ok: true }
+  })
+
+  // ─── Desktop Context (lightweight, for stale detection) ────────────────────
+
+  ipcMain.handle('desktop:get-live-context', async () => {
+    try {
+      const winInfo = await getActiveWindowCached()
+      return {
+        activeApp: winInfo?.activeApp || '',
+        processName: winInfo?.processName || '',
+        windowTitle: winInfo?.windowTitle || '',
+      }
+    } catch {
+      return { activeApp: '', processName: '', windowTitle: '' }
+    }
+  })
+
   // ─── App Actions ────────────────────────────────────────────────────────────
 
   ipcMain.handle('action:execute', async (event, request: { actionId: string; params: Record<string, unknown>; requestId?: string }) => {
@@ -597,6 +756,45 @@ export function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('action:list', () => ACTION_REGISTRY)
+
+  // ─── Intent resolution ─────────────────────────────────────────────────────
+
+  ipcMain.handle('intent:resolve', async (event, utteranceOrPayload: string | { utterance: string; conversationId?: string }) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    const utterance = typeof utteranceOrPayload === 'string' ? utteranceOrPayload : utteranceOrPayload.utterance
+    const convId = typeof utteranceOrPayload === 'object' ? utteranceOrPayload.conversationId : undefined
+
+    const snapshot = await collectDesktopSnapshot(win, { includeClipboard: true, skipSystem: true })
+
+    // Load resume capsule if conversationId provided
+    let capsule: import('./session-memory/types').ResumeCapsule | undefined
+    if (convId) {
+      const conv = loadConversation(convId)
+      capsule = conv?.resumeCapsule ?? undefined
+    }
+
+    const plan = await resolveIntent(utterance, snapshot, capsule)
+
+    if (plan.fallback === 'ask' || plan.actions.length === 0) {
+      return { resolved: false, plan }
+    }
+
+    // Only auto-execute safe actions
+    const allSafe = plan.actions.every((s) => {
+      const def = getActionDefinition(s.actionId)
+      return def?.tier === 'safe'
+    })
+
+    if (!allSafe || plan.needsConfirmation) {
+      return { resolved: true, executed: false, plan }
+    }
+
+    const results: Awaited<ReturnType<typeof executeAction>>[] = []
+    for (const step of plan.actions) {
+      results.push(await executeAction({ actionId: step.actionId, params: step.params }, win))
+    }
+    return { resolved: true, executed: true, plan, results }
+  })
 
   // ─── Notes ──────────────────────────────────────────────────────────────────
 

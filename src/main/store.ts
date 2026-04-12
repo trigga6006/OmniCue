@@ -127,6 +127,8 @@ export interface HistoryEntry {
   duration: number
   completedAt: string
   type?: EntryType
+  conversationId?: string
+  provider?: string
 }
 
 interface HistoryData {

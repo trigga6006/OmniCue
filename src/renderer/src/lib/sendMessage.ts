@@ -53,14 +53,48 @@ function formatDesktopContext(m: ChatMessage): string {
 }
 
 /**
+ * Try resolving a short imperative message as a desktop intent before hitting the AI.
+ * Returns true if the intent was handled (caller should skip AI streaming).
+ */
+/**
+ * Try resolving a short imperative message as a desktop intent before hitting the AI.
+ * Returns true if the intent was handled (caller should skip AI streaming).
+ * Note: the user message is already added to the store before this is called.
+ */
+async function tryIntentResolution(text: string, conversationId?: string): Promise<boolean> {
+  try {
+    const result = await window.electronAPI.resolveIntent({ utterance: text, conversationId })
+    if (!result.resolved) return false
+
+    const store = useCompanionStore.getState()
+
+    const explanation = result.plan.explanation || 'Done.'
+    const detail = result.executed
+      ? explanation
+      : `I can do that, but it needs confirmation: ${explanation}`
+
+    const msgId = generateId()
+    store.startStreaming(msgId)
+    store.finishStreaming(detail)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Shared send logic used by CompanionInput and quick actions.
  * Resolves OCR, builds messages, routes model, and fires the stream.
+ *
+ * Key UX constraint: the user's message must appear immediately in the chat.
+ * All async work (OCR resolution, intent resolution) happens after the
+ * message is visible so the UI never stalls.
  */
 export async function sendCompanionMessage(text: string): Promise<void> {
   const store = useCompanionStore.getState()
   if (store.isStreaming) return
 
-  // Resolve auto-screenshot OCR if pending
+  // ── Step 1: Resolve OCR eagerly (usually already complete) ──────────────
   const auto = store.autoScreenshot
   if (auto?.ocrId && !auto.ocrText) {
     const ocr = await window.electronAPI.getOcrResult(auto.ocrId)
@@ -70,7 +104,6 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     }
   }
 
-  // Resolve manual screenshot OCR if pending
   const manual = store.pendingScreenshot
   if (manual?.ocrId && !manual.ocrText) {
     const ocr = await window.electronAPI.getOcrResult(manual.ocrId)
@@ -80,8 +113,17 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     }
   }
 
+  // ── Step 2: Show user message immediately ───────────────────────────────
   store.addUserMessage(text)
 
+  // ── Step 3: Try intent resolution (non-blocking from user's perspective)
+  // The message is already visible, so the user sees their input right away.
+  if (text.length < 200) {
+    const handled = await tryIntentResolution(text, store.conversationId)
+    if (handled) return
+  }
+
+  // ── Step 4: Build messages and start AI streaming ───────────────────────
   const updatedMessages = useCompanionStore.getState().messages
 
   const coreMessages = updatedMessages.map((m: ChatMessage) => {
@@ -146,5 +188,6 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     sessionId: currentStore.sessionId,
     provider,
     resumeMode,
+    conversationId: currentStore.conversationId,
   })
 }

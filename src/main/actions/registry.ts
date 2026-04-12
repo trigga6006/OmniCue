@@ -1,7 +1,6 @@
 import type { ActionDefinition } from '../../shared/actions'
 
 export const ACTION_REGISTRY: ActionDefinition[] = [
-  // ── Safe ──────────────────────────────────────────────────────────────────
   {
     id: 'clipboard-write',
     name: 'Copy to clipboard',
@@ -69,8 +68,163 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: 'Delete a saved note by ID',
     params: [{ name: 'id', type: 'string', required: true, description: 'Note ID' }],
   },
-
-  // ── Guided ────────────────────────────────────────────────────────────────
+  {
+    id: 'set-reminder',
+    name: 'Set reminder',
+    tier: 'safe',
+    category: 'notifications',
+    description: 'Schedule a one-time OmniCue reminder notification',
+    params: [
+      { name: 'message', type: 'string', required: true, description: 'Reminder message' },
+      { name: 'delaySeconds', type: 'number', required: true, description: 'Seconds until the reminder fires' },
+    ],
+  },
+  {
+    id: 'search-web',
+    name: 'Search the web',
+    tier: 'safe',
+    category: 'navigation',
+    description: 'Open a web search for the provided query',
+    params: [{ name: 'query', type: 'string', required: true, description: 'Search query' }],
+  },
+  {
+    id: 'find-file',
+    name: 'Find file',
+    tier: 'safe',
+    category: 'os',
+    description: 'Search for matching files and return their paths',
+    params: [
+      { name: 'pattern', type: 'string', required: true, description: 'File name or wildcard pattern' },
+      { name: 'startDir', type: 'string', required: false, description: 'Directory to search from' },
+    ],
+  },
+  {
+    id: 'list-running-apps',
+    name: 'List running apps',
+    tier: 'safe',
+    category: 'os',
+    description: 'List visible running applications',
+    params: [],
+  },
+  // ── Browser enrichment actions (safe) ──────────────────────────────────────
+  {
+    id: 'browser-url',
+    name: 'Get browser URL',
+    tier: 'safe',
+    category: 'browser',
+    description: 'Extract the current browser URL from the address bar',
+    params: [],
+  },
+  {
+    id: 'browser-page-content',
+    name: 'Get page content',
+    tier: 'safe',
+    category: 'browser',
+    description: 'Fetch and parse structured page content (title, headings, links, article)',
+    params: [{ name: 'url', type: 'string', required: false, description: 'URL to fetch (uses browser URL if omitted)' }],
+  },
+  {
+    id: 'browser-readable',
+    name: 'Get readable article',
+    tier: 'safe',
+    category: 'browser',
+    description: 'Get a clean readable version of the current page',
+    params: [{ name: 'url', type: 'string', required: false, description: 'URL to fetch (uses browser URL if omitted)' }],
+  },
+  {
+    id: 'browser-headings',
+    name: 'Get page headings',
+    tier: 'safe',
+    category: 'browser',
+    description: 'Extract the heading structure of a page',
+    params: [{ name: 'url', type: 'string', required: false, description: 'URL to fetch (uses browser URL if omitted)' }],
+  },
+  {
+    id: 'browser-links',
+    name: 'Get page links',
+    tier: 'safe',
+    category: 'browser',
+    description: 'Extract all links from a page',
+    params: [{ name: 'url', type: 'string', required: false, description: 'URL to fetch (uses browser URL if omitted)' }],
+  },
+  {
+    id: 'browser-fonts',
+    name: 'Identify page fonts',
+    tier: 'safe',
+    category: 'browser',
+    description: 'Identify all fonts used on a webpage',
+    params: [{ name: 'url', type: 'string', required: false, description: 'URL to inspect (uses browser URL if omitted)' }],
+  },
+  {
+    id: 'browser-selected-text',
+    name: 'Read selected text',
+    tier: 'safe',
+    category: 'browser',
+    description: 'Read the currently selected text in the browser via UI Automation',
+    params: [],
+  },
+  // ── Browser control actions (guided) ─────────────────────────────────────
+  {
+    id: 'browser-back',
+    name: 'Navigate back',
+    tier: 'guided',
+    category: 'browser',
+    description: 'Navigate back in the focused browser',
+    params: [],
+  },
+  {
+    id: 'browser-forward',
+    name: 'Navigate forward',
+    tier: 'guided',
+    category: 'browser',
+    description: 'Navigate forward in the focused browser',
+    params: [],
+  },
+  {
+    id: 'browser-refresh',
+    name: 'Refresh page',
+    tier: 'guided',
+    category: 'browser',
+    description: 'Refresh the focused browser tab',
+    params: [],
+  },
+  {
+    id: 'browser-focus-address-bar',
+    name: 'Focus address bar',
+    tier: 'guided',
+    category: 'browser',
+    description: 'Focus the browser address bar',
+    params: [],
+  },
+  {
+    id: 'browser-copy-url',
+    name: 'Copy URL',
+    tier: 'guided',
+    category: 'browser',
+    description: 'Copy the current URL via address-bar key flow',
+    params: [],
+  },
+  {
+    id: 'browser-selected-text-capture',
+    name: 'Capture selected text',
+    tier: 'guided',
+    category: 'browser',
+    description: 'Capture selected text via clipboard dance (sends Ctrl+C)',
+    params: [],
+  },
+  {
+    id: 'browser-font-download',
+    name: 'Download font',
+    tier: 'guided',
+    category: 'browser',
+    description: 'Download and convert a font from a webpage to disk',
+    params: [
+      { name: 'fontUrl', type: 'string', required: true, description: 'URL of the font file' },
+      { name: 'family', type: 'string', required: false, description: 'Font family name for the filename' },
+      { name: 'destDir', type: 'string', required: true, description: 'Directory to save the font' },
+    ],
+  },
+  // ── Input actions ────────────────────────────────────────────────────────
   {
     id: 'type-text',
     name: 'Type text',
@@ -107,8 +261,6 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
     description: 'Bring an application window to the foreground',
     params: [{ name: 'processName', type: 'string', required: true, description: 'Process name or window title substring' }],
   },
-
-  // ── Dangerous ─────────────────────────────────────────────────────────────
   {
     id: 'delete-file',
     name: 'Delete file',

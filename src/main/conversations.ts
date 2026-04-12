@@ -7,6 +7,7 @@
 import { app } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, readdirSync } from 'fs'
+import type { ResumeCapsule } from './session-memory/types'
 
 const dataDir = app.getPath('userData')
 const convoDir = join(dataDir, 'conversations')
@@ -48,6 +49,7 @@ export interface StoredConversation {
   updatedAt: number
   messageCount: number
   messages: StoredMessage[]
+  resumeCapsule?: ResumeCapsule
 }
 
 export interface ConversationSummary {
@@ -162,6 +164,7 @@ export function saveConversation(data: {
     updatedAt: now,
     messageCount: strippedMessages.length,
     messages: strippedMessages,
+    resumeCapsule: existing?.resumeCapsule,
   }
 
   // Write conversation file
@@ -199,6 +202,12 @@ export function deleteConversation(id: string): void {
   // Update index
   const index = readIndex().filter(c => c.id !== id)
   writeIndex(index)
+
+  // Clean up session memory timeline
+  try {
+    const { deleteSessionTimeline } = require('./session-memory/store')
+    deleteSessionTimeline(id)
+  } catch { /* session-memory module may not be loaded yet */ }
 }
 
 export function renameConversation(id: string, title: string): void {
@@ -250,4 +259,35 @@ export function rebuildIndex(): void {
 
   summaries.sort((a, b) => b.updatedAt - a.updatedAt)
   writeIndex(pruneIndex(summaries))
+}
+
+/**
+ * Clear the resume capsule from a stored conversation.
+ */
+export function clearConversationResumeCapsule(conversationId: string): void {
+  ensureDir()
+  const filePath = join(convoDir, `${conversationId}.json`)
+  try {
+    const raw = readFileSync(filePath, 'utf-8')
+    const conv = JSON.parse(raw) as StoredConversation
+    delete conv.resumeCapsule
+    writeFileSync(filePath, JSON.stringify(conv, null, 2), 'utf-8')
+  } catch { /* conversation may not exist */ }
+}
+
+/**
+ * Update just the resume capsule on a stored conversation without rewriting messages.
+ */
+export function updateConversationResumeCapsule(
+  conversationId: string,
+  capsule: ResumeCapsule
+): void {
+  ensureDir()
+  const filePath = join(convoDir, `${conversationId}.json`)
+  try {
+    const raw = readFileSync(filePath, 'utf-8')
+    const conv = JSON.parse(raw) as StoredConversation
+    conv.resumeCapsule = capsule
+    writeFileSync(filePath, JSON.stringify(conv, null, 2), 'utf-8')
+  } catch { /* conversation may not exist yet */ }
 }

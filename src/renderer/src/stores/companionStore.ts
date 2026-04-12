@@ -128,12 +128,30 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
 
   toggle: () => set((s) => {
     if (s.visible) {
-      return { visible: false, viewHorizon: s.messages.length, showingAll: false, pendingScreenshot: null, showConversationList: false, showNotesList: false }
+      // When closing during streaming, preserve viewHorizon so the current exchange
+      // stays visible when the panel is reopened
+      return {
+        visible: false,
+        viewHorizon: s.isStreaming ? s.viewHorizon : s.messages.length,
+        showingAll: s.isStreaming ? s.showingAll : false,
+        pendingScreenshot: null,
+        showConversationList: false,
+        showNotesList: false,
+      }
     }
     return { visible: true, showingAll: false }
   }),
   open: () => set({ visible: true, showingAll: false }),
-  close: () => set((s) => ({ visible: false, viewHorizon: s.messages.length, showingAll: false, pendingScreenshot: null, panelSizeMode: 'compact' as PanelSizeMode, showConversationList: false, showNotesList: false })),
+  close: () => set((s) => ({
+    visible: false,
+    // Preserve viewHorizon during streaming so reopening shows the active exchange
+    viewHorizon: s.isStreaming ? s.viewHorizon : s.messages.length,
+    showingAll: s.isStreaming ? s.showingAll : false,
+    pendingScreenshot: null,
+    panelSizeMode: 'compact' as PanelSizeMode,
+    showConversationList: false,
+    showNotesList: false,
+  })),
 
   addUserMessage: (content) => {
     set((s) => {
