@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: omnicue
+appId: com.omnicue.app
+productName: OmniCue
 directories:
   buildResources: build
 files:
@@ -12,12 +12,20 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: omnicue
+  executableName: OmniCue
+  target:
+    - target: nsis
+      arch:
+        - x64
 nsis:
-  artifactName: ${name}-${version}-setup.${ext}
-  shortcutName: ${productName}
-  uninstallDisplayName: ${productName}
+  artifactName: OmniCue-${version}-setup.${ext}
+  shortcutName: OmniCue
+  uninstallDisplayName: OmniCue
   createDesktopShortcut: always
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+  deleteAppDataOnUninstall: false
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
@@ -27,7 +35,7 @@ mac:
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
   notarize: false
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: OmniCue-${version}.${ext}
 linux:
   target:
     - AppImage
@@ -36,8 +44,9 @@ linux:
   maintainer: electronjs.org
   category: Utility
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: OmniCue-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: trigga6006
+  repo: OmniCue

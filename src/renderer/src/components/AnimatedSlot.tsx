@@ -10,7 +10,7 @@ import { useRef, useLayoutEffect, useState, useEffect } from 'react'
  * Uses ResizeObserver so internal width changes (e.g. notification
  * bubble expanding to pill) also animate the slot correctly.
  */
-const transition = { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }
+const transition = { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const }
 
 export function AnimatedSlot({
   children,

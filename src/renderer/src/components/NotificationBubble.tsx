@@ -7,6 +7,106 @@ import type { AppNotification } from '@/lib/types'
 
 const SIZE = 36
 
+/** Bare notification content for use inside MorphingPill — no standalone glass background */
+export const NotificationContent = memo(function NotificationContent({
+  notification,
+  onContextMenu,
+}: {
+  notification: AppNotification
+  onContextMenu: (e: React.MouseEvent) => void
+}) {
+  const { remove, setExpanded } = useNotificationStore()
+  const { play } = useSound()
+  const didChime = useRef(false)
+  const [expanded, setLocalExpanded] = useState(false)
+
+  useEffect(() => {
+    if (!didChime.current) {
+      didChime.current = true
+      play()
+    }
+
+    const t1 = setTimeout(() => {
+      setLocalExpanded(true)
+      setExpanded(notification.id, true)
+    }, 350)
+    const t2 = setTimeout(() => {
+      setLocalExpanded(false)
+      setExpanded(notification.id, false)
+    }, 4200)
+
+    return () => {
+      clearTimeout(t1)
+      clearTimeout(t2)
+    }
+  }, [play, notification.id, setExpanded])
+
+  useEffect(() => {
+    if (notification.timeout <= 0) return undefined
+    const timer = setTimeout(() => remove(notification.id), notification.timeout * 1000)
+    return () => clearTimeout(timer)
+  }, [notification.id, notification.timeout, remove])
+
+  const displayText = notification.title
+    ? `${notification.title}: ${notification.message}`
+    : notification.message
+
+  return (
+    <motion.div
+      className="relative flex items-center cursor-pointer group"
+      style={{ height: SIZE }}
+      onContextMenu={onContextMenu}
+      onClick={() => remove(notification.id)}
+      whileHover={{ scale: 1.04 }}
+      whileTap={{ scale: 0.97 }}
+    >
+      <div
+        className="relative z-10 flex items-center justify-center shrink-0"
+        style={{ width: SIZE, height: SIZE }}
+      >
+        <img src={claudeLogo} alt="" style={{ width: 16, height: 16 }} />
+      </div>
+
+      <AnimatePresence>
+        {expanded && (
+          <motion.div
+            className="overflow-hidden relative z-10"
+            initial={{ width: 0, opacity: 0 }}
+            animate={{ width: 'auto', opacity: 1 }}
+            exit={{ width: 0, opacity: 0 }}
+            transition={{ duration: 0.35, ease: [0.25, 0.1, 0.25, 1] }}
+          >
+            <span
+              className="block whitespace-nowrap text-[11px] font-light pr-3 pl-0.5 max-w-[220px] truncate"
+              style={{ color: 'var(--n-text)' }}
+            >
+              {displayText}
+            </span>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {!expanded && (
+        <div
+          className="absolute -bottom-7 left-1/2 -translate-x-1/2 whitespace-nowrap
+            max-w-[180px] truncate px-2 py-0.5 rounded-md
+            text-[9px] tracking-wide
+            opacity-0 group-hover:opacity-100 pointer-events-none
+            transition-opacity duration-200"
+          style={{
+            background: 'var(--n-tooltip-bg)',
+            backdropFilter: 'blur(12px)',
+            color: 'var(--n-tooltip-text)',
+            border: '0.5px solid var(--n-tooltip-border)',
+          }}
+        >
+          {displayText}
+        </div>
+      )}
+    </motion.div>
+  )
+})
+
 export const NotificationBubble = memo(function NotificationBubble({
   notification,
   onContextMenu
@@ -35,10 +135,9 @@ export const NotificationBubble = memo(function NotificationBubble({
   }, [play])
 
   useEffect(() => {
-    if (notification.timeout > 0) {
-      const timer = setTimeout(() => remove(notification.id), notification.timeout * 1000)
-      return () => clearTimeout(timer)
-    }
+    if (notification.timeout <= 0) return undefined
+    const timer = setTimeout(() => remove(notification.id), notification.timeout * 1000)
+    return () => clearTimeout(timer)
   }, [notification.id, notification.timeout, remove])
 
   const displayText = notification.title

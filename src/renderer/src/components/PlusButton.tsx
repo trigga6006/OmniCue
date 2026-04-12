@@ -4,7 +4,7 @@ import { Plus } from 'lucide-react'
 import { useTimerStore } from '@/stores/timerStore'
 import { glassStyle } from '@/lib/glass'
 
-function GripDots(): React.ReactElement {
+export function GripDots(): React.ReactElement {
   return (
     <div className="flex gap-[3px]">
       {[0, 1].map((col) => (
@@ -17,6 +17,36 @@ function GripDots(): React.ReactElement {
     </div>
   )
 }
+
+/** Bare plus icon for use inside MorphingPill — no glass background */
+export const PlusIcon = memo(function PlusIcon({
+  onContextMenu,
+}: {
+  onContextMenu: (e: React.MouseEvent) => void
+}) {
+  const { isCreating, setCreating } = useTimerStore()
+
+  return (
+    <motion.button
+      className="relative w-7 h-7 rounded-full
+        text-[var(--g-text)] hover:text-[var(--g-text-bright)]
+        hover:bg-[var(--g-bg-hover)]
+        flex items-center justify-center cursor-pointer
+        transition-colors duration-200 outline-none"
+      whileHover={{ scale: 1.05 }}
+      whileTap={{ scale: 0.97 }}
+      onClick={() => setCreating(!isCreating)}
+      onContextMenu={onContextMenu}
+    >
+      <motion.div
+        animate={{ rotate: isCreating ? 45 : 0 }}
+        transition={{ type: 'spring', stiffness: 300, damping: 20 }}
+      >
+        <Plus size={14} strokeWidth={2.5} />
+      </motion.div>
+    </motion.button>
+  )
+})
 
 export const PlusButton = memo(function PlusButton({
   onContextMenu,

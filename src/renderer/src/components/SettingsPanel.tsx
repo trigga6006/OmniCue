@@ -28,10 +28,12 @@ export function SettingsPanel({ visible, onClose, anchorX, anchorY }: { visible:
   const { settings, update } = useSettingsStore()
   const [durationInput, setDurationInput] = useState(formatTime(settings.defaultDuration))
   const [claudeInstalled, setClaudeInstalled] = useState<boolean | null>(null)
+  const [codexInstalled, setCodexInstalled] = useState<boolean | null>(null)
 
   useEffect(() => {
-    if (visible && claudeInstalled === null) {
-      window.electronAPI.checkClaudeIntegration().then(setClaudeInstalled)
+    if (visible) {
+      if (claudeInstalled === null) window.electronAPI.checkClaudeIntegration().then(setClaudeInstalled)
+      if (codexInstalled === null) window.electronAPI.checkCodexIntegration().then(setCodexInstalled)
     }
   }, [visible])
 
@@ -173,6 +175,30 @@ export function SettingsPanel({ visible, onClose, anchorX, anchorY }: { visible:
                     onClick={async () => {
                       const result = await window.electronAPI.installClaudeIntegration()
                       if (result.ok) setClaudeInstalled(true)
+                    }}
+                    className="text-[11px] text-[var(--g-text-muted)] hover:text-[var(--g-text)]
+                      underline underline-offset-2 cursor-pointer transition-colors outline-none"
+                  >
+                    Install
+                  </button>
+                )}
+              </div>
+
+              {/* Codex integration */}
+              <div className="flex items-center justify-between">
+                <span className="text-[12px] text-[var(--g-text-secondary)]">Codex</span>
+                {codexInstalled === null ? (
+                  <span className="text-[11px] text-[var(--g-text-faint)]">...</span>
+                ) : codexInstalled ? (
+                  <div className="flex items-center gap-1">
+                    <CheckCircle2 size={11} className="text-emerald-400/70" strokeWidth={2} />
+                    <span className="text-[11px] text-emerald-400/60">Active</span>
+                  </div>
+                ) : (
+                  <button
+                    onClick={async () => {
+                      const result = await window.electronAPI.installCodexIntegration()
+                      if (result.ok) setCodexInstalled(true)
                     }}
                     className="text-[11px] text-[var(--g-text-muted)] hover:text-[var(--g-text)]
                       underline underline-offset-2 cursor-pointer transition-colors outline-none"

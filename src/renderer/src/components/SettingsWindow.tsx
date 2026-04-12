@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { motion, AnimatePresence } from 'motion/react'
 import {
   Clock, Settings, Trash2, X, CheckCircle2, AlertCircle,
-  Bell, Repeat, Timer, Plus, Pencil
+  Bell, Repeat, Timer, Plus, Pencil, Sparkles, FolderOpen, ChevronDown, Keyboard
 } from 'lucide-react'
 import claudeLogo from '@/assets/claude-logo.svg'
 import codexLogo from '@/assets/codex-logo.svg'
@@ -11,13 +12,14 @@ import { useHistoryStore } from '@/stores/historyStore'
 import { parseDuration } from '@/lib/parseDuration'
 import { formatTime, timeAgo, generateId } from '@/lib/utils'
 import type { EntryType, Alarm, Reminder, HistoryEntry } from '@/lib/types'
+import { MemoryPreviewCard } from './MemoryPreviewCard'
 
-type Tab = 'history' | 'settings' | 'alarms' | 'reminders'
+type Tab = 'history' | 'settings' | 'alarms' | 'reminders' | 'ai'
 
 function getInitialTab(): Tab {
   const params = new URLSearchParams(window.location.hash.split('?')[1] || '')
   const t = params.get('tab') as Tab
-  return ['history', 'settings', 'alarms', 'reminders'].includes(t) ? t : 'settings'
+  return ['history', 'settings', 'alarms', 'reminders', 'ai'].includes(t) ? t : 'settings'
 }
 
 export function SettingsWindow() {
@@ -30,7 +32,7 @@ export function SettingsWindow() {
     loadHistory()
 
     const unsubTab = window.electronAPI.onSwitchTab((t) => {
-      if (['history', 'settings', 'alarms', 'reminders'].includes(t)) setTab(t as Tab)
+      if (['history', 'settings', 'alarms', 'reminders', 'ai'].includes(t)) setTab(t as Tab)
     })
     const unsubHistory = window.electronAPI.onNewHistoryEntry((entry: unknown) => {
       addLocal(entry as HistoryEntry)
@@ -79,6 +81,10 @@ export function SettingsWindow() {
           <Clock size={13} />
           History
         </TabButton>
+        <TabButton active={tab === 'ai'} onClick={() => setTab('ai')}>
+          <Sparkles size={13} />
+          AI
+        </TabButton>
       </div>
 
       {/* Content */}
@@ -87,6 +93,7 @@ export function SettingsWindow() {
         {tab === 'alarms' && <AlarmsTab />}
         {tab === 'reminders' && <RemindersTab />}
         {tab === 'history' && <HistoryTab entries={entries} clearHistory={clearHistory} />}
+        {tab === 'ai' && <AiTab settings={settings} update={update} />}
       </div>
     </div>
   )
@@ -165,6 +172,27 @@ function SettingsTab({
             checked={settings.theme === 'dark'}
             onChange={(v) => update({ theme: v ? 'dark' : 'light' })}
           />
+        </Row>
+        <Row label="Dev folder">
+          <div className="flex items-center gap-2">
+            <span className="text-[12px] text-white/40 truncate max-w-[140px]" title={settings.devRootPath || 'Not set'}>
+              {settings.devRootPath
+                ? settings.devRootPath.split(/[/\\]/).slice(-2).join('/')
+                : 'Not set'}
+            </span>
+            <button
+              onClick={async () => {
+                const folder = await window.electronAPI.selectFolder()
+                if (folder) update({ devRootPath: folder })
+              }}
+              className="p-1.5 rounded-md
+                bg-white/[0.08] text-white/60 hover:bg-white/[0.14] hover:text-white/90
+                border border-white/[0.08] transition-colors duration-150 cursor-pointer outline-none"
+              title="Browse"
+            >
+              <FolderOpen size={12} />
+            </button>
+          </div>
         </Row>
       </Section>
 
@@ -606,17 +634,24 @@ function ReminderForm({
         </div>
         <div className="flex-1">
           <label className="text-[11px] text-white/35 uppercase tracking-wider mb-1.5 block">Interval</label>
-          <select
-            value={intervalMinutes}
-            onChange={(e) => setIntervalMinutes(Number(e.target.value))}
-            className="w-full bg-white/[0.06] rounded-lg px-3 py-2
-              text-[13px] text-white/80 border border-white/[0.08] outline-none
-              focus:border-white/[0.2] transition-colors cursor-pointer appearance-none"
-          >
-            {INTERVAL_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
+          <div className="relative">
+            <select
+              value={intervalMinutes}
+              onChange={(e) => setIntervalMinutes(Number(e.target.value))}
+              className="w-full bg-white/[0.06] rounded-lg px-3 py-2 pr-8
+                text-[13px] text-white/80 border border-white/[0.08] outline-none
+                focus:border-white/[0.2] transition-colors cursor-pointer appearance-none
+                [&>option]:bg-[#1f1f1f] [&>option]:text-white"
+            >
+              {INTERVAL_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <ChevronDown
+              size={14}
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/35"
+            />
+          </div>
         </div>
       </div>
       <div className="flex justify-end gap-2">
@@ -717,6 +752,69 @@ function HistoryTab({
   entries: ReturnType<typeof useHistoryStore.getState>['entries']
   clearHistory: () => void
 }) {
+  const [previewId, setPreviewId] = useState<string | null>(null)
+  const [previewCapsule, setPreviewCapsule] = useState<import('@/lib/types').ResumeCapsule | null>(null)
+  const [previewLiveCtx, setPreviewLiveCtx] = useState<{ activeApp: string; processName: string; windowTitle: string } | null>(null)
+  const [tooltipPos, setTooltipPos] = useState<{ top: number; left: number; width: number; direction: 'above' | 'below' }>({ top: 0, left: 0, width: 280, direction: 'above' })
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const rowRefs = useRef(new Map<string, HTMLDivElement>())
+  const liveCtxFetched = useRef(false)
+
+  const cancelDismiss = useCallback(() => {
+    if (dismissTimer.current) {
+      clearTimeout(dismissTimer.current)
+      dismissTimer.current = null
+    }
+  }, [])
+
+  const handleRowEnter = useCallback(async (entry: HistoryEntry) => {
+    if (!entry.conversationId) return
+    cancelDismiss()
+    hoverTimer.current = setTimeout(async () => {
+      const capsule = await window.electronAPI.sessionMemoryGetCapsule(entry.conversationId!)
+      if (!capsule) return
+
+      if (!liveCtxFetched.current) {
+        try {
+          const ctx = await window.electronAPI.desktopGetLiveContext()
+          setPreviewLiveCtx(ctx)
+        } catch { /* ignore */ }
+        liveCtxFetched.current = true
+      }
+
+      // Calculate position
+      const el = rowRefs.current.get(entry.id)
+      if (el) {
+        const rect = el.getBoundingClientRect()
+        if (rect.top > 180) {
+          setTooltipPos({ top: rect.top - 4, left: rect.left, width: rect.width, direction: 'above' })
+        } else {
+          setTooltipPos({ top: rect.bottom + 4, left: rect.left, width: rect.width, direction: 'below' })
+        }
+      }
+
+      setPreviewCapsule(capsule)
+      setPreviewId(entry.id)
+    }, 300)
+  }, [])
+
+  const handleRowLeave = useCallback(() => {
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current)
+      hoverTimer.current = null
+    }
+    dismissTimer.current = setTimeout(() => {
+      setPreviewId(null)
+    }, 150)
+  }, [])
+
+  const handleClearMemory = useCallback(async (conversationId: string) => {
+    await window.electronAPI.sessionMemoryClear(conversationId)
+    setPreviewId(null)
+    setPreviewCapsule(null)
+  }, [])
+
   return (
     <div className="p-6">
       <div className="flex items-center justify-between mb-4">
@@ -743,25 +841,749 @@ function HistoryTab({
       ) : (
         <div className="space-y-0.5">
           {entries.map((entry, i) => (
-            <motion.div
+            <div
               key={entry.id}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-lg
-                hover:bg-white/[0.04] transition-colors"
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.02 }}
+              ref={(el) => { if (el) rowRefs.current.set(entry.id, el); else rowRefs.current.delete(entry.id) }}
+              onMouseEnter={() => handleRowEnter(entry)}
+              onMouseLeave={handleRowLeave}
             >
-              <TypeIcon type={entry.type} />
-              <div className="flex-1 min-w-0">
-                <div className="text-[13px] text-white/70 truncate">{entry.name}</div>
-                <div className="text-[11px] text-white/30">{entrySubtitle(entry)}</div>
-              </div>
-              <div className="text-[11px] text-white/25 shrink-0">
-                {timeAgo(entry.completedAt)}
-              </div>
-            </motion.div>
+              <motion.div
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg
+                  hover:bg-white/[0.04] transition-colors"
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.02 }}
+              >
+                <TypeIcon type={entry.type} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-[13px] text-white/70 truncate">{entry.name}</div>
+                  <div className="text-[11px] text-white/30">{entrySubtitle(entry)}</div>
+                </div>
+                <div className="text-[11px] text-white/25 shrink-0">
+                  {timeAgo(entry.completedAt)}
+                </div>
+              </motion.div>
+            </div>
           ))}
         </div>
+      )}
+
+      {/* Portal-based tooltip for memory preview */}
+      {createPortal(
+        <AnimatePresence>
+          {previewId && previewCapsule && (
+            <motion.div
+              className="fixed z-[9999] pointer-events-none"
+              style={{
+                left: tooltipPos.left,
+                width: tooltipPos.width,
+                ...(tooltipPos.direction === 'above'
+                  ? { bottom: window.innerHeight - tooltipPos.top }
+                  : { top: tooltipPos.top }),
+              }}
+              initial={{ opacity: 0, y: tooltipPos.direction === 'above' ? 6 : -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: tooltipPos.direction === 'above' ? 6 : -6 }}
+              transition={{ duration: 0.12 }}
+            >
+              <div
+                className="pointer-events-auto"
+                onMouseEnter={cancelDismiss}
+                onMouseLeave={handleRowLeave}
+              >
+                <MemoryPreviewCard
+                  capsule={previewCapsule}
+                  isCurrentConversation={false}
+                  liveContext={previewLiveCtx}
+                  onClear={() => {
+                    const entry = entries.find((e) => e.id === previewId)
+                    if (entry?.conversationId) handleClearMemory(entry.conversationId)
+                  }}
+                />
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>,
+        document.body
+      )}
+    </div>
+  )
+}
+
+function AiTab({
+  settings,
+  update,
+}: {
+  settings: ReturnType<typeof useSettingsStore.getState>['settings']
+  update: ReturnType<typeof useSettingsStore.getState>['update']
+}) {
+  const [codexStatus, setCodexStatus] = useState<{
+    authenticated: boolean
+    planType?: string
+    model?: string
+    authMode?: string
+  } | null>(null)
+
+  const provider = settings.aiProvider || 'codex'
+
+  useEffect(() => {
+    window.electronAPI.getCodexStatus().then(setCodexStatus)
+  }, [])
+
+  const providerOptions = [
+    { key: 'codex' as const, label: 'Codex', desc: 'OpenAI Codex CLI' },
+    { key: 'claude' as const, label: 'Claude', desc: 'Anthropic Claude' },
+    { key: 'opencode' as const, label: 'OpenCode', desc: 'Multi-model agent' },
+    { key: 'kimicode' as const, label: 'Kimi Code', desc: 'Moonshot agent' },
+    { key: 'openai' as const, label: 'OpenAI', desc: 'Direct API' },
+    { key: 'gemini' as const, label: 'Gemini', desc: 'Google AI' },
+    { key: 'deepseek' as const, label: 'DeepSeek', desc: 'DeepSeek API' },
+    { key: 'groq' as const, label: 'Groq', desc: 'Ultra-fast inference' },
+    { key: 'mistral' as const, label: 'Mistral', desc: 'Mistral AI' },
+    { key: 'xai' as const, label: 'Grok', desc: 'xAI Grok' },
+    { key: 'glm' as const, label: 'GLM', desc: 'Zhipu AI' },
+    { key: 'kimi' as const, label: 'Kimi', desc: 'Moonshot AI' },
+  ]
+
+  const codexAuthLabel =
+    codexStatus?.authMode === 'chatgpt'
+      ? 'ChatGPT OAuth'
+      : codexStatus?.authMode
+        ? codexStatus.authMode
+        : 'OAuth'
+
+  return (
+    <div className="p-6 space-y-6">
+      <Section title="AI Provider">
+        <div className="px-4 py-3">
+          <div className="grid grid-cols-5 gap-1.5">
+            {providerOptions.map((p) => (
+              <button
+                key={p.key}
+                onClick={() => update({ aiProvider: p.key })}
+                className={`px-2 py-1.5 rounded-lg text-center transition-all cursor-pointer border ${
+                  provider === p.key
+                    ? 'bg-white/[0.1] border-white/[0.2] text-white/90'
+                    : 'bg-white/[0.03] border-white/[0.06] text-white/40 hover:bg-white/[0.06] hover:text-white/60'
+                }`}
+              >
+                <div className="text-[12px] font-medium">{p.label}</div>
+                <div className="text-[9px] mt-0.5 opacity-60 truncate">{p.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {provider === 'codex' && (
+          <>
+            <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+              {codexStatus?.authenticated ? (
+                <>
+                  <span className="text-green-400/80">Codex CLI authenticated</span>
+                  {` via ${codexAuthLabel}`}
+                  {codexStatus.planType ? ` (${codexStatus.planType})` : ''}.
+                  {codexStatus.model ? ` Default model: ${codexStatus.model}.` : ''}
+                  {' '}Your local Codex login will be used automatically.
+                  The API key below is an optional fallback if Codex CLI is unavailable.
+                </>
+              ) : (
+                <>
+                  Codex CLI not detected. Run{' '}
+                  <span className="text-white/50 font-mono">codex login</span>{' '}
+                  in a terminal to authenticate with OpenAI OAuth, or add an API key below.
+                </>
+              )}
+            </div>
+            <Row label="OpenAI API Key">
+              <input
+                type="password"
+                value={settings.aiApiKey}
+                onChange={(e) => update({ aiApiKey: e.target.value })}
+                placeholder="Optional fallback"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Model Override">
+              <input
+                type="text"
+                value={settings.aiModel}
+                onChange={(e) => update({ aiModel: e.target.value })}
+                placeholder="Leave empty for default"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Base URL">
+              <input
+                type="text"
+                value={settings.aiBaseUrl}
+                onChange={(e) => update({ aiBaseUrl: e.target.value })}
+                placeholder="Optional API fallback URL"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+          </>
+        )}
+
+        {provider === 'claude' && (
+          <ClaudeSettings settings={settings} update={update} />
+        )}
+
+        {provider === 'opencode' && (
+          <>
+            <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+              OpenCode is a multi-model coding agent CLI. Install with{' '}
+              <span className="text-white/50 font-mono">npm i -g opencode-ai</span>.
+              {' '}Set any API key below to use any model as a coding agent.
+            </div>
+            <Row label="API Key">
+              <input
+                type="password"
+                value={settings.opencodeApiKey}
+                onChange={(e) => update({ opencodeApiKey: e.target.value })}
+                placeholder="Any provider API key"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Model">
+              <input
+                type="text"
+                value={settings.opencodeModel}
+                onChange={(e) => update({ opencodeModel: e.target.value })}
+                placeholder="e.g. anthropic/claude-sonnet-4-6"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+          </>
+        )}
+
+        {provider === 'kimicode' && (
+          <>
+            <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+              Kimi Code is Moonshot AI's coding agent CLI. Install with{' '}
+              <span className="text-white/50 font-mono">pip install kimi-cli</span>{' '}
+              or run{' '}
+              <span className="text-white/50 font-mono">kimi login</span>{' '}
+              to authenticate. Falls back to Kimi API if CLI is unavailable.
+            </div>
+            <Row label="API Key (optional)">
+              <input
+                type="password"
+                value={settings.kimiApiKey}
+                onChange={(e) => update({ kimiApiKey: e.target.value })}
+                placeholder="Uses kimi login if empty"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+          </>
+        )}
+
+        {provider === 'openai' && (
+          <>
+            <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+              Direct OpenAI API access. Requires an API key from{' '}
+              <span className="text-white/50">platform.openai.com</span>.
+            </div>
+            <Row label="OpenAI API Key">
+              <input
+                type="password"
+                value={settings.aiApiKey}
+                onChange={(e) => update({ aiApiKey: e.target.value })}
+                placeholder="sk-..."
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Model">
+              <input
+                type="text"
+                value={settings.aiModel}
+                onChange={(e) => update({ aiModel: e.target.value })}
+                placeholder="gpt-4o"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+            <Row label="Base URL">
+              <input
+                type="text"
+                value={settings.aiBaseUrl}
+                onChange={(e) => update({ aiBaseUrl: e.target.value })}
+                placeholder="https://api.openai.com/v1"
+                className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+                  text-[13px] text-white/80 border border-white/[0.08] outline-none
+                  focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+              />
+            </Row>
+          </>
+        )}
+
+        {provider === 'gemini' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Google Gemini API. Get your API key from"
+            linkText="aistudio.google.com"
+            apiKeyField="geminiApiKey"
+            modelField="geminiModel"
+            modelPlaceholder="gemini-3.1-pro"
+          />
+        )}
+
+        {provider === 'deepseek' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="DeepSeek API with reasoning models. Get your API key from"
+            linkText="platform.deepseek.com"
+            apiKeyField="deepseekApiKey"
+            modelField="deepseekModel"
+            modelPlaceholder="deepseek-chat"
+          />
+        )}
+
+        {provider === 'groq' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Groq ultra-fast inference. Get your API key from"
+            linkText="console.groq.com"
+            apiKeyField="groqApiKey"
+            modelField="groqModel"
+            modelPlaceholder="meta-llama/llama-4-scout-17b-16e-instruct"
+          />
+        )}
+
+        {provider === 'mistral' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Mistral AI API. Get your API key from"
+            linkText="console.mistral.ai"
+            apiKeyField="mistralApiKey"
+            modelField="mistralModel"
+            modelPlaceholder="mistral-large-latest"
+          />
+        )}
+
+        {provider === 'xai' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="xAI Grok API. Get your API key from"
+            linkText="console.x.ai"
+            apiKeyField="xaiApiKey"
+            modelField="xaiModel"
+            modelPlaceholder="grok-4"
+          />
+        )}
+
+        {provider === 'glm' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Zhipu AI GLM API. Get your API key from"
+            linkText="open.bigmodel.cn"
+            apiKeyField="glmApiKey"
+            modelField="glmModel"
+            modelPlaceholder="glm-5.1"
+          />
+        )}
+
+        {provider === 'kimi' && (
+          <CompatProviderSettings
+            settings={settings}
+            update={update}
+            description="Moonshot Kimi API. Get your API key from"
+            linkText="platform.moonshot.ai"
+            apiKeyField="kimiApiKey"
+            modelField="kimiModel"
+            modelPlaceholder="kimi-k2.5"
+          />
+        )}
+      </Section>
+
+      <Section title="Agent Permissions">
+        <Row label="Permission mode">
+          <div className="relative">
+            <select
+              value={settings.agentPermissions || 'read-only'}
+              onChange={(e) => update({ agentPermissions: e.target.value as 'read-only' | 'workspace-write' | 'full-access' })}
+              className="bg-white/[0.06] rounded-lg px-3 py-1.5 pr-8
+                text-[13px] text-white/80 border border-white/[0.08] outline-none
+                focus:border-white/[0.2] transition-colors cursor-pointer appearance-none
+                [&>option]:bg-[#1f1f1f] [&>option]:text-white"
+            >
+              <option value="read-only">Read-only</option>
+              <option value="workspace-write">Workspace-write</option>
+              <option value="full-access">Full-access</option>
+            </select>
+            <ChevronDown
+              size={14}
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/35"
+            />
+          </div>
+        </Row>
+        <div className="px-4 pb-3 text-[11px] text-white/30 leading-relaxed">
+          {settings.agentPermissions === 'full-access'
+            ? 'Agents can inspect and edit any reachable local files. Use with care.'
+            : settings.agentPermissions === 'workspace-write'
+              ? 'Agents can inspect files and edit within the resolved working area.'
+              : 'Agents can inspect files but cannot modify them.'}
+        </div>
+        <div className="px-4 pb-3 space-y-1 text-[10px] text-white/20">
+          {provider === 'codex' && <p>Codex honors this setting directly via sandbox policy.</p>}
+          {provider === 'claude' && <p>Claude Code uses permission-mode flag; enforcement is best-effort.</p>}
+          {provider === 'opencode' && <p>OpenCode uses its own permission system; configure via opencode.json.</p>}
+          {provider === 'kimicode' && <p>Kimi Code manages permissions internally.</p>}
+          {provider !== 'codex' && provider !== 'claude' && provider !== 'opencode' && provider !== 'kimicode' && (
+            <p>API providers have no local filesystem access.</p>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Companion Hotkey">
+        <HotkeyRecorder currentAccelerator={settings.companionHotkey || 'Ctrl+Shift+Space'} />
+      </Section>
+    </div>
+  )
+}
+
+function ClaudeSettings({
+  settings,
+  update,
+}: {
+  settings: ReturnType<typeof useSettingsStore.getState>['settings']
+  update: ReturnType<typeof useSettingsStore.getState>['update']
+}) {
+  const [claudeStatus, setClaudeStatus] = useState<{
+    authenticated: boolean
+    planType?: string
+  } | null>(null)
+
+  useEffect(() => {
+    window.electronAPI.getClaudeStatus().then(setClaudeStatus)
+  }, [])
+
+  return (
+    <>
+      <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+        {claudeStatus?.authenticated ? (
+          <>
+            <span className="text-green-400/80">Claude Code CLI authenticated</span>
+            {claudeStatus.planType ? ` (${claudeStatus.planType})` : ''}.
+            {' '}Your Max subscription will be used automatically.
+            The API key below is an optional fallback if the CLI is unavailable.
+          </>
+        ) : (
+          <>
+            Claude Code CLI not detected. Run{' '}
+            <span className="text-white/50 font-mono">claude login</span>{' '}
+            in a terminal to use your Max subscription, or add an API key below.
+          </>
+        )}
+      </div>
+      <Row label="API Key (optional)">
+        <input
+          type="password"
+          value={settings.claudeApiKey}
+          onChange={(e) => update({ claudeApiKey: e.target.value })}
+          placeholder={claudeStatus?.authenticated ? 'Using Max subscription' : 'sk-ant-...'}
+          className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+            text-[13px] text-white/80 border border-white/[0.08] outline-none
+            focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+        />
+      </Row>
+      <Row label="Model Override">
+        <input
+          type="text"
+          value={settings.claudeModel}
+          onChange={(e) => update({ claudeModel: e.target.value })}
+          placeholder="Leave empty for auto"
+          className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+            text-[13px] text-white/80 border border-white/[0.08] outline-none
+            focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+        />
+      </Row>
+    </>
+  )
+}
+
+function CompatProviderSettings({
+  settings,
+  update,
+  description,
+  linkText,
+  apiKeyField,
+  modelField,
+  modelPlaceholder,
+}: {
+  settings: ReturnType<typeof useSettingsStore.getState>['settings']
+  update: ReturnType<typeof useSettingsStore.getState>['update']
+  description: string
+  linkText: string
+  apiKeyField: keyof typeof settings
+  modelField: keyof typeof settings
+  modelPlaceholder: string
+}) {
+  return (
+    <>
+      <div className="px-4 py-3 text-[12px] text-white/35 leading-relaxed">
+        {description}{' '}
+        <span className="text-white/50">{linkText}</span>.
+      </div>
+      <Row label="API Key">
+        <input
+          type="password"
+          value={(settings[apiKeyField] as string) || ''}
+          onChange={(e) => update({ [apiKeyField]: e.target.value })}
+          placeholder="Enter API key"
+          className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+            text-[13px] text-white/80 border border-white/[0.08] outline-none
+            focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+        />
+      </Row>
+      <Row label="Model">
+        <input
+          type="text"
+          value={(settings[modelField] as string) || ''}
+          onChange={(e) => update({ [modelField]: e.target.value })}
+          placeholder={modelPlaceholder}
+          className="w-48 bg-white/[0.06] rounded-lg px-3 py-1.5
+            text-[13px] text-white/80 border border-white/[0.08] outline-none
+            focus:border-white/[0.2] transition-colors placeholder:text-white/20"
+        />
+      </Row>
+    </>
+  )
+}
+
+// ─── Hotkey Recorder ──────────────────────────────────────────────────────────
+
+/** Map e.code to a canonical Electron-accelerator part. */
+const CODE_TO_ACCEL: Record<string, string> = {
+  ControlLeft: 'Ctrl', ControlRight: 'Ctrl',
+  ShiftLeft: 'Shift', ShiftRight: 'Shift',
+  AltLeft: 'Alt', AltRight: 'Alt',
+  MetaLeft: 'Meta', MetaRight: 'Meta',
+  Space: 'Space', Tab: 'Tab', Enter: 'Enter',
+  Backspace: 'Backspace', Delete: 'Delete',
+  Escape: 'Escape', Insert: 'Insert',
+  Home: 'Home', End: 'End', PageUp: 'PageUp', PageDown: 'PageDown',
+  ArrowUp: 'Up', ArrowDown: 'Down', ArrowLeft: 'Left', ArrowRight: 'Right',
+  Backquote: '`', Minus: '-', Equal: '=',
+  BracketLeft: '[', BracketRight: ']', Backslash: '\\',
+  Semicolon: ';', Quote: "'", Comma: ',', Period: '.', Slash: '/',
+}
+
+function codeToAccelPart(code: string): string {
+  if (CODE_TO_ACCEL[code]) return CODE_TO_ACCEL[code]
+  if (code.startsWith('Key')) return code.slice(3)          // KeyA → A
+  if (code.startsWith('Digit')) return code.slice(5)        // Digit1 → 1
+  if (code.startsWith('Numpad')) return 'num' + code.slice(6) // Numpad0 → num0
+  if (/^F\d+$/.test(code)) return code                     // F1–F24
+  return code
+}
+
+/** Modifiers always sort first in a stable order. */
+const MOD_ORDER = ['Ctrl', 'Shift', 'Alt', 'Meta']
+function buildAccelerator(parts: string[]): string {
+  const mods = parts.filter((p) => MOD_ORDER.includes(p)).sort((a, b) => MOD_ORDER.indexOf(a) - MOD_ORDER.indexOf(b))
+  const keys = parts.filter((p) => !MOD_ORDER.includes(p))
+  return [...mods, ...keys].join('+')
+}
+
+function HotkeyRecorder({ currentAccelerator }: { currentAccelerator: string }) {
+  const [recording, setRecording] = useState(false)
+  const [pending, setPending] = useState<string | null>(null)
+  const [liveKeys, setLiveKeys] = useState<string[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const heldRef = useRef(new Set<string>())       // raw codes currently held
+  const peakRef = useRef(new Set<string>())        // all codes pressed during this gesture
+
+  const startRecording = useCallback(() => {
+    setRecording(true)
+    setPending(null)
+    setLiveKeys([])
+    setError(null)
+    heldRef.current.clear()
+    peakRef.current.clear()
+  }, [])
+
+  const cancel = useCallback(() => {
+    setRecording(false)
+    setPending(null)
+    setLiveKeys([])
+    setError(null)
+  }, [])
+
+  const save = useCallback(async () => {
+    if (!pending) return
+    setError(null)
+    const ok = await window.electronAPI.updateCompanionHotkey(pending)
+    if (ok) {
+      setRecording(false)
+      setPending(null)
+      setLiveKeys([])
+    } else {
+      setError('Could not register — shortcut may conflict with another app.')
+    }
+  }, [pending])
+
+  // Track keydown/keyup while recording to accumulate the full combo
+  useEffect(() => {
+    if (!recording) return
+    const held = heldRef.current
+    const peak = peakRef.current
+
+    const updateLive = () => {
+      const parts = [...peak].map(codeToAccelPart)
+      // Deduplicate (e.g. ControlLeft + ControlRight → one Ctrl)
+      const unique = [...new Set(parts)]
+      setLiveKeys(unique)
+    }
+
+    const onDown = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.repeat) return
+      held.add(e.code)
+      peak.add(e.code)
+      updateLive()
+    }
+
+    const onUp = (e: KeyboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      held.delete(e.code)
+      // When all keys released → finalize the combo
+      if (held.size === 0 && peak.size > 0) {
+        const parts = [...new Set([...peak].map(codeToAccelPart))]
+        const accel = buildAccelerator(parts)
+        setPending(accel)
+        peak.clear()
+      }
+    }
+
+    // If the window loses focus while keys are held, treat it as a full release
+    const onBlur = () => {
+      if (peak.size > 0) {
+        const parts = [...new Set([...peak].map(codeToAccelPart))]
+        const accel = buildAccelerator(parts)
+        setPending(accel)
+      }
+      held.clear()
+      peak.clear()
+    }
+
+    window.addEventListener('keydown', onDown, true)
+    window.addEventListener('keyup', onUp, true)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onDown, true)
+      window.removeEventListener('keyup', onUp, true)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [recording])
+
+  // Decide what to display: live keys while holding, pending after release, or current saved
+  const displayParts: string[] =
+    recording && liveKeys.length > 0 && !pending ? liveKeys
+    : (pending || currentAccelerator).split('+')
+
+  return (
+    <div className="px-4 py-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Keyboard size={14} className="text-white/40" />
+          <span className="text-[13px] text-white/65">Toggle AI panel</span>
+        </div>
+
+        {!recording ? (
+          <button
+            onClick={startRecording}
+            className="text-[11px] text-white/50 hover:text-white/80 px-2 py-1
+              rounded-lg border border-white/[0.08] hover:border-white/[0.15]
+              bg-white/[0.04] hover:bg-white/[0.08] transition-colors cursor-pointer"
+          >
+            Record
+          </button>
+        ) : (
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={cancel}
+              className="text-[11px] text-white/40 hover:text-white/70 px-2 py-1
+                rounded-lg border border-white/[0.06] hover:border-white/[0.12]
+                transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+            {pending && (
+              <button
+                onClick={save}
+                className="text-[11px] text-green-400/80 hover:text-green-400 px-2 py-1
+                  rounded-lg border border-green-400/20 hover:border-green-400/40
+                  bg-green-400/[0.06] hover:bg-green-400/[0.12] transition-colors cursor-pointer"
+              >
+                Save
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Key chips display */}
+      <div
+        className={`flex items-center gap-1.5 px-3 py-2.5 rounded-lg border transition-colors min-h-[38px] ${
+          recording
+            ? 'border-white/[0.2] bg-white/[0.06]'
+            : 'border-white/[0.06] bg-white/[0.03]'
+        }`}
+      >
+        {recording && liveKeys.length === 0 && !pending ? (
+          <motion.span
+            className="text-[12px] text-white/30 italic"
+            animate={{ opacity: [0.3, 0.7, 0.3] }}
+            transition={{ duration: 1.5, repeat: Infinity }}
+          >
+            Press your hotkey combination…
+          </motion.span>
+        ) : (
+          displayParts.map((key, i) => (
+            <span key={i} className="flex items-center gap-1.5">
+              {i > 0 && <span className="text-[10px] text-white/20">+</span>}
+              <span
+                className="px-2 py-0.5 rounded-md text-[12px] font-mono
+                  bg-white/[0.08] border border-white/[0.12] text-white/75"
+              >
+                {key}
+              </span>
+            </span>
+          ))
+        )}
+      </div>
+
+      {error && (
+        <p className="text-[11px] text-red-400/80">{error}</p>
+      )}
+
+      {recording && (
+        <p className="text-[10px] text-white/25">
+          Hold your keys together, then release. Click Save to apply.
+        </p>
       )}
     </div>
   )

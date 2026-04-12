@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useLayoutEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import { Timer, Bell, Repeat } from 'lucide-react'
 import { useTimerStore } from '@/stores/timerStore'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { useNotificationStore } from '@/stores/notificationStore'
 import { generateId, formatClockTime } from '@/lib/utils'
 import { parseDuration } from '@/lib/parseDuration'
 import { glassStyle } from '@/lib/glass'
@@ -100,9 +101,18 @@ function shortDisplay(mode: Mode, value: number): string {
   return String(value)
 }
 
-export function TimerPill() {
+export function TimerPill({
+  bare = false,
+  onWidthChange,
+  onClipPathChange,
+}: {
+  bare?: boolean
+  onWidthChange?: (w: number) => void
+  onClipPathChange?: (path: string | undefined) => void
+} = {}) {
   const { setCreating, addTimer } = useTimerStore()
   const { settings } = useSettingsStore()
+  const addNotification = useNotificationStore((s) => s.add)
 
   const [mode, setMode] = useState<Mode>('timer')
   const [value, setValue] = useState(() => getInitialValue('timer', settings.defaultDuration))
@@ -214,20 +224,36 @@ export function TimerPill() {
     } else if (mode === 'alarm') {
       const hh = String(Math.floor(value / 60)).padStart(2, '0')
       const mm = String(value % 60).padStart(2, '0')
+      const alarmLabel = trimmed || 'Alarm'
       window.electronAPI.setAlarm({
         id: generateId(),
-        label: trimmed || 'Alarm',
+        label: alarmLabel,
         time: `${hh}:${mm}`,
         repeat: false,
         enabled: true,
       })
+      addNotification({
+        id: generateId(),
+        title: 'Alarm set',
+        message: `${alarmLabel} at ${formatClockTime(value)}`,
+        timeout: 3000,
+        createdAt: Date.now(),
+      })
     } else {
+      const reminderLabel = trimmed || 'Reminder'
       window.electronAPI.setReminder({
         id: generateId(),
-        label: trimmed || 'Reminder',
+        label: reminderLabel,
         intervalMinutes: value,
         enabled: true,
         nextFireAt: Date.now() + value * 60_000,
+      })
+      addNotification({
+        id: generateId(),
+        title: 'Reminder set',
+        message: `${reminderLabel} every ${value >= 60 ? `${value / 60}h` : `${value}m`}`,
+        timeout: 3000,
+        createdAt: Date.now(),
       })
     }
 
@@ -237,6 +263,7 @@ export function TimerPill() {
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') {
       e.preventDefault()
+      e.stopPropagation()
       if (phase === 'drag') setPhase('label')
       else if (phase === 'editTime') confirmTimeInput()
       else handleSubmit()
@@ -267,6 +294,15 @@ export function TimerPill() {
       )`
     : undefined
 
+  // Report width and clip-path to parent (MorphingPill) in bare mode
+  useLayoutEffect(() => {
+    if (bare) onWidthChange?.(currentW)
+  }, [bare, currentW, onWidthChange])
+
+  useLayoutEffect(() => {
+    if (bare) onClipPathChange?.(clipPath)
+  }, [bare, clipPath, onClipPathChange])
+
   return (
     <motion.div
       className="relative"
@@ -280,15 +316,17 @@ export function TimerPill() {
           : { duration: 0 }
       }
     >
-      {/* Pill background */}
-      <div
-        className="absolute inset-0 rounded-full backdrop-blur-2xl backdrop-saturate-[1.8]
-          bg-[var(--g-bg)] border-[0.5px] border-[var(--g-line)]"
-        style={{
-          ...glassStyle,
-          ...(clipPath ? { clipPath, WebkitClipPath: clipPath } : {}),
-        }}
-      />
+      {/* Pill background — hidden in bare mode (MorphingPill provides the surface) */}
+      {!bare && (
+        <div
+          className="absolute inset-0 rounded-full backdrop-blur-2xl backdrop-saturate-[1.8]
+            bg-[var(--g-bg)] border-[0.5px] border-[var(--g-line)]"
+          style={{
+            ...glassStyle,
+            ...(clipPath ? { clipPath, WebkitClipPath: clipPath } : {}),
+          }}
+        />
+      )}
 
       {/* Content */}
       <div className="absolute inset-0 flex items-center px-2">

@@ -1,10 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
-import { PlusButton } from '@/components/PlusButton'
-import { TimerPill } from '@/components/TimerPill'
-import { TimerCircle } from '@/components/TimerCircle'
-import { NotificationBubble } from '@/components/NotificationBubble'
-import { AnimatedSlot } from '@/components/AnimatedSlot'
+import { AnimatePresence } from 'motion/react'
+import { MorphingPill } from '@/components/MorphingPill'
 import { ContextMenu } from '@/components/ContextMenu'
 import { HistoryPanel } from '@/components/HistoryPanel'
 import { SettingsPanel } from '@/components/SettingsPanel'
@@ -17,6 +13,9 @@ import { generateId } from '@/lib/utils'
 import { useGlobalClickThrough } from '@/hooks/useClickThrough'
 import { useBrightnessSampler } from '@/hooks/useBrightnessSampler'
 import { FullScreenAlert } from '@/components/FullScreenAlert'
+import { CompanionPanel } from '@/components/CompanionPanel'
+import { useCompanionStore } from '@/stores/companionStore'
+import { suppressRegionPublish } from '@/hooks/useClickThrough'
 import type { AppNotification, ActiveTimer } from '@/lib/types'
 
 // Bar top offset inside the window (px from top edge)
@@ -24,7 +23,7 @@ const BAR_TOP = 10
 // Fixed window width — generous enough for typical bar content (timers + notifications).
 // Using a fixed width avoids constant setBounds() during AnimatedSlot animations.
 // 800px covers ~5 timers + 3 expanded notifications comfortably.
-const WIN_WIDTH = 800
+const WIN_WIDTH = 1000
 // Base height when panels are closed vs open
 const BASE_HEIGHT = 500
 const PANEL_HEIGHT = 500
@@ -36,13 +35,12 @@ export default function App() {
   const timers = useTimerStore((s) => s.timers)
   const addTimer = useTimerStore((s) => s.addTimer)
   const isCreating = useTimerStore((s) => s.isCreating)
-  const notifications = useNotificationStore((s) => s.notifications)
   const addNotification = useNotificationStore((s) => s.add)
   const loadSettings = useSettingsStore((s) => s.load)
   const loadHistory = useHistoryStore((s) => s.load)
   const addHistoryLocal = useHistoryStore((s) => s.addLocal)
 
-  const settings = useSettingsStore((s) => s.settings)
+  const companionVisible = useCompanionStore((s) => s.visible)
 
   const [contextMenu, setContextMenu] = useState({ x: 0, y: 0, visible: false })
   const [showHistory, setShowHistory] = useState(false)
@@ -60,6 +58,7 @@ export default function App() {
   const posRef = useRef(pos)
   posRef.current = pos
   const lastHeight = useRef(BASE_HEIGHT)
+  const wasCompanionVisible = useRef(false)
 
   // --- Initialization ---
   useEffect(() => {
@@ -123,6 +122,22 @@ export default function App() {
       addHistoryLocal(entry as HistoryEntry)
     })
 
+    // Listen for global hotkey toggle
+    const unsubCompanion = window.electronAPI.onToggleCompanion(() => {
+      const companion = useCompanionStore.getState()
+      if (!companion.visible) {
+        setShowHistory(false)
+        setShowSettings(false)
+        window.electronAPI.captureActiveWindow().then((result) => {
+          if (result) useCompanionStore.getState().captureAndResolve(result)
+        })
+        companion.open()
+      } else {
+        companion.close()
+        window.electronAPI.setInteractiveLock(false)
+      }
+    })
+
     const handler = (e: MouseEvent) => e.preventDefault()
     document.addEventListener('contextmenu', handler)
     return () => {
@@ -130,19 +145,73 @@ export default function App() {
       unsubNotify()
       unsubTimer()
       unsubHistory()
+      unsubCompanion()
     }
   }, [])
 
   // --- Window resize on panel open/close only ---
   // Width is fixed (WIN_WIDTH) to avoid setBounds() during content animations.
   // Only height changes when panels open/close (a discrete user action).
+  // Mutual exclusivity: companion closes other panels, other panels close companion
   useEffect(() => {
-    const height = (showHistory || showSettings) ? PANEL_HEIGHT : BASE_HEIGHT
-    if (height !== lastHeight.current) {
-      lastHeight.current = height
-      window.electronAPI.requestWindowResize(WIN_WIDTH, height)
+    if (companionVisible) {
+      setShowHistory(false)
+      setShowSettings(false)
+    }
+  }, [companionVisible])
+
+  useEffect(() => {
+    const hasOverlayOpen =
+      companionVisible ||
+      showHistory ||
+      showSettings ||
+      contextMenu.visible ||
+      fullScreenAlert !== null
+
+    window.electronAPI.setPanelOpen(hasOverlayOpen)
+  }, [companionVisible, showHistory, showSettings, contextMenu.visible, fullScreenAlert])
+
+  useEffect(() => {
+    if (showHistory || showSettings) {
+      useCompanionStore.getState().close()
     }
   }, [showHistory, showSettings])
+
+  useEffect(() => {
+    const justClosed = !companionVisible && wasCompanionVisible.current
+    wasCompanionVisible.current = companionVisible
+
+    // Companion open and size transitions are fully handled by the store
+    // (open() and transitionPanelSize()). This effect only handles:
+    // 1. Delayed window shrink after the companion exit animation
+    // 2. Non-companion panel height changes (history/settings)
+    let closeTimerId: ReturnType<typeof setTimeout> | null = null
+    let closeRelease: (() => void) | null = null
+
+    if (!companionVisible) {
+      const height = (showHistory || showSettings) ? PANEL_HEIGHT : BASE_HEIGHT
+      if (justClosed) {
+        // Delay resize so the 300ms exit animation finishes smoothly
+        closeRelease = suppressRegionPublish()
+        closeTimerId = setTimeout(() => {
+          if (useCompanionStore.getState().visible) {
+            closeRelease?.()
+            return
+          }
+          lastHeight.current = height
+          window.electronAPI.requestWindowResize(WIN_WIDTH, height).then(() => closeRelease?.())
+        }, 350)
+      } else if (height !== lastHeight.current) {
+        lastHeight.current = height
+        window.electronAPI.requestWindowResize(WIN_WIDTH, height)
+      }
+    }
+
+    return () => {
+      if (closeTimerId) clearTimeout(closeTimerId)
+      if (closeRelease) closeRelease()
+    }
+  }, [showHistory, showSettings, companionVisible])
 
   // --- Drag: move the BrowserWindow itself ---
   const handleGripMouseDown = useCallback((e: React.MouseEvent) => {
@@ -233,94 +302,68 @@ export default function App() {
   // The BrowserWindow itself is positioned so this maps to the correct screen location.
   return (
     <div className="w-full h-full pointer-events-none select-none">
-      <div
-        className="fixed flex items-center pointer-events-none"
-        style={{
-          left: '50%',
-          top: BAR_TOP,
-          transform: 'translateX(-50%)',
-        }}
-        onMouseEnter={() => setIsHoveringBar(true)}
-        onMouseLeave={() => !isDragging && setIsHoveringBar(false)}
-      >
-        <div className="pointer-events-auto" data-interactive>
-          <PlusButton
+      <>
+        <div
+          className="fixed flex items-center justify-center pointer-events-none"
+          style={{
+            left: '50%',
+            top: BAR_TOP,
+            transform: 'translateX(-50%)',
+          }}
+        >
+          <MorphingPill
             onContextMenu={handleContextMenu}
             showGrip={showGrip}
             onGripMouseDown={handleGripMouseDown}
+            onMouseEnter={() => setIsHoveringBar(true)}
+            onMouseLeave={() => !isDragging && setIsHoveringBar(false)}
           />
         </div>
 
+        {/* Context menu */}
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          visible={contextMenu.visible}
+          onClose={() => setContextMenu((c) => ({ ...c, visible: false }))}
+          onHistory={() => setShowHistory(true)}
+          onSettings={() => window.electronAPI.openSettingsWindow('settings')}
+          onResetPosition={resetPosition}
+          onMoveToDisplay={moveToDisplay}
+        />
+
+        {/* Full-screen alert overlay */}
         <AnimatePresence>
-          {isCreating && (
-            <motion.div
-              key="pill"
-              className="pointer-events-auto shrink-0 overflow-visible"
-              data-interactive
-              initial={{ width: 0, opacity: 0, marginLeft: 0 }}
-              animate={{ width: 'auto', opacity: 1, marginLeft: 8 }}
-              exit={{ width: 0, opacity: 0, marginLeft: 0 }}
-              transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
-            >
-              <TimerPill />
-            </motion.div>
+          {fullScreenAlert && (
+            <FullScreenAlert
+              key="fs-alert"
+              message={fullScreenAlert.message}
+              source={fullScreenAlert.source}
+              onDismiss={dismissFullScreenAlert}
+            />
           )}
         </AnimatePresence>
 
-        <AnimatePresence>
-          {timers.map((timer) => (
-            <AnimatedSlot key={timer.id} className="pointer-events-auto" dataInteractive>
-              <TimerCircle timer={timer} onContextMenu={handleContextMenu} />
-            </AnimatedSlot>
-          ))}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {notifications.map((n) => (
-            <AnimatedSlot key={n.id} className="pointer-events-auto" dataInteractive>
-              <NotificationBubble notification={n} onContextMenu={handleContextMenu} />
-            </AnimatedSlot>
-          ))}
-        </AnimatePresence>
-      </div>
-
-      {/* Context menu */}
-      <ContextMenu
-        x={contextMenu.x}
-        y={contextMenu.y}
-        visible={contextMenu.visible}
-        onClose={() => setContextMenu((c) => ({ ...c, visible: false }))}
-        onHistory={() => setShowHistory(true)}
-        onSettings={() => window.electronAPI.openSettingsWindow('settings')}
-        onResetPosition={resetPosition}
-        onMoveToDisplay={moveToDisplay}
-      />
-
-      {/* Full-screen alert overlay */}
-      <AnimatePresence>
-        {fullScreenAlert && (
-          <FullScreenAlert
-            key="fs-alert"
-            message={fullScreenAlert.message}
-            source={fullScreenAlert.source}
-            onDismiss={dismissFullScreenAlert}
-          />
-        )}
-      </AnimatePresence>
-
-      {/* Panels — anchored to window center, below the bar */}
-      <HistoryPanel
-        visible={showHistory}
-        onClose={() => setShowHistory(false)}
-        anchorX={Math.round(window.innerWidth / 2)}
-        anchorY={BAR_TOP}
-      />
-      <SettingsPanel
-        visible={showSettings}
-        onClose={() => setShowSettings(false)}
-        anchorX={Math.round(window.innerWidth / 2)}
-        anchorY={BAR_TOP}
-      />
+        {/* Panels — anchored to window center, below the bar */}
+        <HistoryPanel
+          visible={showHistory}
+          onClose={() => setShowHistory(false)}
+          anchorX={Math.round(window.innerWidth / 2)}
+          anchorY={BAR_TOP}
+        />
+        <SettingsPanel
+          visible={showSettings}
+          onClose={() => setShowSettings(false)}
+          anchorX={Math.round(window.innerWidth / 2)}
+          anchorY={BAR_TOP}
+        />
+        <CompanionPanel
+          visible={companionVisible}
+          onClose={() => useCompanionStore.getState().close()}
+          anchorX={Math.round(window.innerWidth / 2)}
+          anchorY={BAR_TOP}
+        />
+      </>
     </div>
   )
 }

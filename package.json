@@ -1,13 +1,18 @@
 {
   "name": "omnicue",
-  "version": "1.0.0",
-  "description": "An Electron application with React and TypeScript",
+  "version": "0.1.0",
+  "description": "AI-powered desktop overlay companion for Windows",
   "main": "./out/main/index.js",
   "bin": {
     "omnicue": "./bin/omniox.js"
   },
-  "author": "example.com",
-  "homepage": "https://electron-vite.org",
+  "author": "Ben Fowler",
+  "homepage": "https://github.com/trigga6006/OmniCue",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/trigga6006/OmniCue.git"
+  },
+  "license": "MIT",
   "scripts": {
     "format": "prettier --write .",
     "lint": "eslint --cache .",
@@ -24,12 +29,19 @@
     "build:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.87.0",
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "@mozilla/readability": "^0.6.0",
     "@tailwindcss/vite": "^4.2.2",
     "clsx": "^2.1.1",
+    "fontverter": "^2.0.0",
+    "jsdom": "^29.0.2",
     "lucide-react": "^1.7.0",
     "motion": "^12.38.0",
+    "node-windows-ocr": "^1.1.1",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.2",
     "zustand": "^5.0.12"

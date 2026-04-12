@@ -10,6 +10,12 @@ export const glassPanelStyle = {
     '0 24px 64px var(--g-shadow-color-heavy), 0 0 0 0.5px var(--g-shadow-edge), inset 0 0.5px 0 var(--g-shadow-inset-subtle)',
 }
 
+/** Companion panel — deeper, more premium shadow */
+export const glassCompanionStyle = {
+  boxShadow:
+    '0 32px 80px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.06), inset 0 0.5px 0 rgba(255,255,255,0.08)',
+}
+
 /** Context menu glass shadow */
 export const glassMenuStyle = {
   boxShadow:
