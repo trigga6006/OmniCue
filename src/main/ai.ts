@@ -1076,7 +1076,7 @@ function buildCodexSandboxPolicy(
   }
 }
 
-function getCodexCliCommand(images: PreparedImage[], permissions: AgentPermissions = 'read-only', model?: string): { command: string; args: string[] } {
+function getCodexCliCommand(images: PreparedImage[], permissions: AgentPermissions = 'read-only', model?: string): { command: string; args: string[]; shell?: boolean } {
   const baseArgs = [
     'exec',
     '--json',
@@ -1105,10 +1105,6 @@ function getCodexCliCommand(images: PreparedImage[], permissions: AgentPermissio
   return { command: 'codex', args: baseArgs }
 }
 
-function quoteForCmd(value: string): string {
-  if (!/[ \t"]/.test(value)) return value
-  return `"${value.replace(/"/g, '""')}"`
-}
 
 async function streamViaCodexCliFallback(
   messages: ChatMessage[],
@@ -1386,7 +1382,7 @@ async function streamViaClaudeApi(
   callbacks.onFinish(fullText)
 }
 
-function getClaudeCliCommand(permissions: AgentPermissions = 'read-only'): { command: string; args: string[] } {
+function getClaudeCliCommand(permissions: AgentPermissions = 'read-only'): { command: string; args: string[]; shell?: boolean } {
   const baseArgs = [
     '-p',               // print mode (non-interactive)
     '--output-format', 'stream-json',
@@ -1552,7 +1548,7 @@ async function streamViaClaudeCodeCli(
 
 // ── OpenCode CLI Harness ─────────────────────────────────────────────────────
 
-function getOpenCodeCommand(model?: string, cwd?: string): { command: string; args: string[]; env: Record<string, string> } {
+function getOpenCodeCommand(model?: string, cwd?: string): { command: string; args: string[]; env: Record<string, string>; shell?: boolean } {
   const settings = settingsStore.get()
   const resolvedModel = model || settings.opencodeModel?.trim() || ''
 
@@ -1681,7 +1677,7 @@ async function streamViaOpenCodeCli(
 
 // ── Kimi Code CLI Harness ───────────────────────────────────────────────────
 
-function getKimiCodeCommand(): { command: string; args: string[]; env: Record<string, string> } {
+function getKimiCodeCommand(): { command: string; args: string[]; env: Record<string, string>; shell?: boolean } {
   const baseArgs = ['--print', '--output-format', 'stream-json']
 
   const env: Record<string, string> = { ...process.env } as Record<string, string>
