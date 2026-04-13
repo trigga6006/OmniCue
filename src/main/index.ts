@@ -1,6 +1,7 @@
 import { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, globalShortcut } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { fixPath } from './fixPath'
 import { registerIpcHandlers } from './ipc'
 import { startServer } from './server'
 import { startScheduler } from './scheduler'
@@ -13,6 +14,11 @@ import { recordFocus } from './context/focus-history'
 import { pruneStale as pruneSessionMemory } from './session-memory/store'
 import icon from '../../resources/icon.png?asset'
 import trayIconPath from '../../resources/tray-icon.png?asset'
+
+// Fix PATH before any child processes are spawned.
+// Packaged Electron apps on Windows may inherit a stale PATH from Explorer
+// that doesn't include directories like ~/.local/bin or %APPDATA%/npm.
+fixPath()
 
 let mainWindow: BrowserWindow | null = null
 let settingsWindow: BrowserWindow | null = null

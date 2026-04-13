@@ -558,8 +558,10 @@ class CodexAppServerClient {
     if (this.child) return
 
     const { command, args } = getCodexExecCommand()
+    const cwd = require('os').homedir()
+    console.log(`[OmniCue] Codex app-server spawn: ${command} ${args.join(' ')} (cwd: ${cwd})`)
     const child = spawn(command, args, {
-      cwd: process.cwd(),
+      cwd,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
@@ -580,8 +582,10 @@ class CodexAppServerClient {
       }
     })
 
-    child.stderr.on('data', () => {
-      // Ignore Codex CLI warnings on stderr; protocol data is on stdout.
+    child.stderr.on('data', (chunk: Buffer) => {
+      // Log stderr for diagnostics — protocol data is on stdout, but errors land here.
+      const text = chunk.toString('utf8').trim()
+      if (text) console.warn('[OmniCue] Codex app-server stderr:', text)
     })
 
     child.on('error', (error) => {
@@ -1032,9 +1036,11 @@ async function streamViaCodexCliFallback(
   }
 
   const { command, args } = getCodexCliCommand(tempImages, permissions, modelOverride)
+  const resolvedCwd = cwd || require('os').homedir()
+  console.log(`[OmniCue] Codex CLI fallback spawn: ${command} ${args.join(' ')} (cwd: ${resolvedCwd})`)
 
   const child = spawn(command, args, {
-    cwd: cwd || process.cwd(),
+    cwd: resolvedCwd,
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
@@ -1328,9 +1334,11 @@ async function streamViaClaudeCodeCli(
   const prompt = buildNonInteractivePrompt(messages)
 
   const { command, args } = getClaudeCliCommand(permissions)
+  const resolvedCwd = cwd || require('os').homedir()
+  console.log(`[OmniCue] Claude CLI spawn: ${command} ${args.join(' ')} (cwd: ${resolvedCwd})`)
 
   const child = spawn(command, args, {
-    cwd: cwd || process.cwd(),
+    cwd: resolvedCwd,
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
