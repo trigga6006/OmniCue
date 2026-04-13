@@ -231,6 +231,14 @@ const electronAPI = {
     return () => ipcRenderer.removeListener('action:executing', handler)
   },
 
+  // ─── Claude Code ControlPlane ────────────────────────────────────────────
+  claudeRespondPermission: (payload: { tabId: string; questionId: string; optionId: string }): Promise<boolean> =>
+    ipcRenderer.invoke('claude:respond-permission', payload),
+  claudeGetHealth: (): Promise<unknown> => ipcRenderer.invoke('claude:health'),
+  claudeSetPermissionMode: (mode: string): void => {
+    ipcRenderer.send('claude:set-permission-mode', mode)
+  },
+
   // ─── Watchers ────────────────────────────────────────────────────────────
   createWatcher: (watcher: unknown): Promise<void> => ipcRenderer.invoke('watcher:create', watcher),
   listWatchers: (): Promise<unknown[]> => ipcRenderer.invoke('watcher:list'),

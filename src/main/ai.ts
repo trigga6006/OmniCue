@@ -3,9 +3,44 @@ import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { spawn, execSync, type ChildProcessWithoutNullStreams } from 'child_process'
-import { existsSync } from 'fs'
+import { existsSync, appendFileSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import Anthropic from '@anthropic-ai/sdk'
+
+// ── Diagnostic file logger ──────────────────────────────────────────────────
+// Writes to %APPDATA%/omnicue/omnicue-debug.log so we can diagnose packaged app issues
+const LOG_PATH = join(process.env.APPDATA || homedir(), 'omnicue', 'omnicue-debug.log')
+try { mkdirSync(join(process.env.APPDATA || homedir(), 'omnicue'), { recursive: true }) } catch { /* */ }
+
+function debugLog(msg: string): void {
+  const line = `[${new Date().toISOString()}] ${msg}\n`
+  console.log(line.trimEnd())
+  try { appendFileSync(LOG_PATH, line) } catch { /* best effort */ }
+}
+
+// ── Claude Code ControlPlane (replaces one-shot CLI spawns) ─────────────────
+import { ClaudeControlPlane } from './claude/control-plane'
+import type { NormalizedClaudeEvent } from '../shared/claude-types'
+
+let _claudeControlPlane: ClaudeControlPlane | null = null
+// Map OmniCue sessionIds -> ControlPlane tabIds
+const claudeSessionToTab = new Map<string, string>()
+
+export function getClaudeControlPlane(): ClaudeControlPlane {
+  if (!_claudeControlPlane) {
+    _claudeControlPlane = new ClaudeControlPlane()
+  }
+  return _claudeControlPlane
+}
+
+export function shutdownClaudeControlPlane(): void {
+  if (_claudeControlPlane) {
+    _claudeControlPlane.shutdown()
+    _claudeControlPlane = null
+    claudeSessionToTab.clear()
+  }
+}
+
 import { settingsStore } from './store'
 import { getCodexStatus } from './codex-auth'
 import { getClaudeStatus } from './claude-auth'
@@ -107,24 +142,22 @@ function resolveCliPath(name: string): string | null {
 }
 
 /**
- * Build a spawn command that avoids cmd.exe when possible.
- * For .exe files, spawns directly. For .cmd shims, uses shell: true (no /d flag).
+ * Build a spawn command using the resolved absolute path but always through
+ * a shell. CLI tools like Claude Code and Codex expect a console/TTY-like
+ * environment — spawning .exe directly with no shell causes them to hang
+ * or degrade after the first invocation.
+ *
+ * Using shell: true (without /d) provides:
+ * - Proper console environment for the child process
+ * - AutoRun scripts that may extend PATH
+ * - Correct stdin/stdout pipe semantics
  */
-function buildDirectSpawn(name: string, args: string[]): { command: string; args: string[]; options: { shell?: boolean } } {
+function buildDirectSpawn(name: string, args: string[]): { command: string; args: string[]; options: { shell: boolean } } {
   const resolved = resolveCliPath(name)
-
-  if (resolved) {
-    // .cmd/.bat files need shell execution
-    if (/\.(cmd|bat)$/i.test(resolved)) {
-      return { command: resolved, args, options: { shell: true } }
-    }
-    // .exe or extensionless binary — spawn directly
-    return { command: resolved, args, options: {} }
-  }
-
-  // Not found in known locations — fall back to shell: true which does PATH lookup
-  // without the /d flag (so AutoRun can extend PATH if needed)
-  return { command: name, args, options: { shell: true } }
+  // Always use shell — the resolved path avoids PATH lookup issues,
+  // while shell: true ensures proper console environment
+  const command = resolved || name
+  return { command, args, options: { shell: true } }
 }
 
 const SYSTEM_PROMPT = `You are OmniCue, a concise desktop AI companion. Be helpful, brief, and specific. Prefer bullet points and short paragraphs over walls of text. You may use Markdown formatting: bold, italic, inline code, fenced code blocks with language tags, lists, and headers. Keep formatting purposeful and avoid unnecessary decoration for simple answers.
@@ -653,7 +686,7 @@ class CodexAppServerClient {
 
     const { command, args, shell } = getCodexExecCommand()
     const cwd = homedir()
-    console.log(`[OmniCue] Codex app-server spawn: ${command} ${args.join(' ')} (cwd: ${cwd}, shell: ${!!shell})`)
+    debugLog(`Codex app-server spawn: ${command} ${args.join(' ')} (cwd: ${cwd}, shell: ${!!shell})`)
     const child = spawn(command, args, {
       cwd,
       env: process.env,
@@ -1127,7 +1160,7 @@ async function streamViaCodexCliFallback(
 
   const { command, args, shell } = getCodexCliCommand(tempImages, permissions, modelOverride)
   const resolvedCwd = cwd || homedir()
-  console.log(`[OmniCue] Codex CLI fallback spawn: ${command} ${args.join(' ')} (cwd: ${resolvedCwd}, shell: ${!!shell})`)
+  debugLog(`Codex CLI fallback spawn: ${command} ${args.join(' ')} (cwd: ${resolvedCwd}, shell: ${!!shell})`)
 
   const child = spawn(command, args, {
     cwd: resolvedCwd,
@@ -1382,168 +1415,169 @@ async function streamViaClaudeApi(
   callbacks.onFinish(fullText)
 }
 
-function getClaudeCliCommand(permissions: AgentPermissions = 'read-only'): { command: string; args: string[]; shell?: boolean } {
-  const baseArgs = [
-    '-p',               // print mode (non-interactive)
-    '--output-format', 'stream-json',
-    '--verbose',
-    '--include-partial-messages',
-  ]
+// ── Legacy getClaudeCliCommand removed — now handled by ClaudeControlPlane ──
 
-  // Map permissions to Claude Code's permission-mode flag
-  if (permissions === 'full-access') {
-    baseArgs.push('--permission-mode', 'bypassPermissions')
-  } else if (permissions === 'workspace-write') {
-    baseArgs.push('--permission-mode', 'acceptEdits')
-  } else {
-    baseArgs.push('--permission-mode', 'plan')
-  }
-
-  if (process.platform === 'win32') {
-    const direct = buildDirectSpawn('claude', baseArgs)
-    return { command: direct.command, args: direct.args, shell: direct.options.shell }
-  }
-
-  return { command: 'claude', args: baseArgs }
-}
-
+/**
+ * Stream via Claude Code ControlPlane — bidirectional stream-json protocol
+ * with session continuity, proper process lifecycle, and permission hooks.
+ */
 async function streamViaClaudeCodeCli(
   messages: ChatMessage[],
   callbacks: AiStreamCallbacks,
   abortSignal?: AbortSignal,
   _modelOverride?: string,
   cwd?: string,
-  permissions: AgentPermissions = 'read-only'
+  _permissions: AgentPermissions = 'read-only',
+  sessionId?: string
 ): Promise<void> {
-  // Claude Code CLI is running in non-interactive print mode here, so we pass
-  // screenshot context as text only and avoid promising native OmniCue pickers.
+  console.error(`[DIAG] streamViaClaudeCodeCli ENTERED | cwd=${cwd} sessionId=${sessionId}`)
   const prompt = buildNonInteractivePrompt(messages)
-
-  const { command, args, shell } = getClaudeCliCommand(permissions)
+  console.error(`[DIAG] prompt built | length=${prompt.length}`)
   const resolvedCwd = cwd || homedir()
-  console.log(`[OmniCue] Claude CLI spawn: ${command} ${args.join(' ')} (cwd: ${resolvedCwd}, shell: ${!!shell})`)
+  const cp = getClaudeControlPlane()
+  console.error(`[DIAG] ControlPlane obtained`)
 
-  const child = spawn(command, args, {
-    cwd: resolvedCwd,
-    env: process.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-    windowsHide: true,
-    shell,
-  })
-  trackChild(child)
+  // Get or create a ControlPlane tab for this OmniCue session
+  let tabId = sessionId ? claudeSessionToTab.get(sessionId) : undefined
+  if (!tabId) {
+    tabId = cp.createTab()
+    if (sessionId) claudeSessionToTab.set(sessionId, tabId)
+  }
+  console.error(`[DIAG] tabId=${tabId}`)
 
-  let stdoutBuffer = ''
-  let stderrBuffer = ''
+  const requestId = randomUUID()
   let fullText = ''
-  // Track current tool use being streamed
   let currentToolName: string | null = null
   let currentToolInput = ''
+  let settled = false
 
-  const handleAbort = (): void => {
-    killProcessTree(child)
+  // Listen for events on this tab
+  const onEvent = (_tabId: string, event: NormalizedClaudeEvent): void => {
+    if (_tabId !== tabId) return
+    console.error(`[DIAG] onEvent: type=${event.type} tabId=${_tabId}`)
+
+    switch (event.type) {
+      case 'text_chunk':
+        fullText += event.text
+        callbacks.onToken(event.text)
+        break
+
+      case 'tool_call':
+        currentToolName = event.toolName
+        currentToolInput = ''
+        break
+
+      case 'tool_call_update':
+        currentToolInput += event.partialInput
+        break
+
+      case 'tool_call_complete':
+        if (currentToolName) {
+          let summary = currentToolInput
+          try {
+            const parsed = JSON.parse(currentToolInput)
+            summary = parsed.command || parsed.pattern || parsed.file_path || parsed.content?.slice(0, 80) || currentToolInput
+          } catch { /* use raw */ }
+          callbacks.onToolUse?.(currentToolName, summary)
+          currentToolName = null
+          currentToolInput = ''
+        }
+        break
+
+      case 'task_complete':
+        if (!settled) {
+          settled = true
+          fullText = event.result || fullText
+          callbacks.onFinish(fullText)
+        }
+        break
+
+      case 'error':
+        if (!settled) {
+          settled = true
+          callbacks.onError(event.message)
+        }
+        break
+
+      case 'permission_request':
+        // Forward permission requests to the renderer via the interaction callback
+        if (callbacks.onInteractionRequest) {
+          callbacks.onInteractionRequest({
+            id: event.questionId,
+            sessionId: sessionId || '',
+            kind: 'command-approval' as any,
+            title: `${event.toolName} requires permission`,
+            description: event.toolDescription,
+            options: event.options?.map(o => ({
+              id: o.id,
+              label: o.label,
+              description: '',
+            })),
+          } as any)
+        }
+        break
+
+      case 'rate_limit':
+        // Only treat as error if status is NOT "allowed" — every successful
+        // response includes an informational rate_limit event with status "allowed"
+        if (!settled && event.status !== 'allowed') {
+          settled = true
+          callbacks.onError(`Rate limited: ${event.status}. Resets at ${new Date(event.resetsAt).toLocaleTimeString()}.`)
+        }
+        break
+    }
   }
 
-  abortSignal?.addEventListener('abort', handleAbort, { once: true })
-  child.stdin.end(prompt)
+  const onError = (_tabId: string, enrichedError: any): void => {
+    if (_tabId !== tabId || settled) return
+    settled = true
+    const msg = enrichedError?.message || 'Claude Code process error'
+    const stderr = enrichedError?.stderrTail?.join('\n') || ''
+    callbacks.onError(stderr ? `${msg}\n${stderr}` : msg)
+  }
 
-  child.stdout.on('data', (chunk: Buffer) => {
-    stdoutBuffer += chunk.toString('utf8')
-    const lines = stdoutBuffer.split(/\r?\n/)
-    stdoutBuffer = lines.pop() || ''
+  cp.on('event', onEvent)
+  cp.on('error', onError)
 
-    for (const line of lines) {
-      const trimmed = line.trim()
-      if (!trimmed.startsWith('{')) continue
-
-      try {
-        const event = JSON.parse(trimmed) as Record<string, unknown>
-
-        if (event.type === 'stream_event') {
-          const inner = event.event as Record<string, unknown> | undefined
-          if (!inner) continue
-
-          // Text streaming delta
-          if (inner.type === 'content_block_delta') {
-            const delta = inner.delta as Record<string, unknown> | undefined
-            if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-              fullText += delta.text
-              callbacks.onToken(delta.text)
-            }
-            // Tool input JSON delta — accumulate
-            if (delta?.type === 'input_json_delta' && typeof delta.partial_json === 'string') {
-              currentToolInput += delta.partial_json
-            }
-          }
-
-          // Tool use start
-          if (inner.type === 'content_block_start') {
-            const block = inner.content_block as Record<string, unknown> | undefined
-            if (block?.type === 'tool_use' && typeof block.name === 'string') {
-              currentToolName = block.name
-              currentToolInput = ''
-            }
-          }
-
-          // Tool use end — emit the completed tool call
-          if (inner.type === 'content_block_stop' && currentToolName) {
-            // Try to extract a concise summary from the JSON input
-            let summary = currentToolInput
-            try {
-              const parsed = JSON.parse(currentToolInput)
-              // For common tools, pick the most useful field
-              summary = parsed.command || parsed.pattern || parsed.file_path || parsed.content?.slice(0, 80) || currentToolInput
-            } catch {
-              // Use raw input if not valid JSON
-            }
-            callbacks.onToolUse?.(currentToolName, summary)
-            currentToolName = null
-            currentToolInput = ''
-          }
-        }
-
-        // Final result
-        if (event.type === 'result' && typeof event.result === 'string') {
-          fullText = event.result
-        }
-      } catch {
-        // Ignore malformed lines
-      }
-    }
-  })
-
-  child.stderr.on('data', (chunk: Buffer) => {
-    stderrBuffer += chunk.toString('utf8')
-  })
-
-  return new Promise((resolve, reject) => {
-    child.on('error', (error) => {
-      abortSignal?.removeEventListener('abort', handleAbort)
-      reject(error)
-    })
-
-    child.on('close', (code) => {
-      abortSignal?.removeEventListener('abort', handleAbort)
-
-      if (abortSignal?.aborted) {
-        resolve()
-        return
-      }
-
+  // Handle abort
+  const handleAbort = (): void => {
+    debugLog(`Claude CLI aborted by signal (tabId=${tabId}, settled=${settled}, fullTextLen=${fullText.length})`)
+    if (!settled) {
+      settled = true
+      cp.cancelTab(tabId!)
+      // Notify the UI that the stream was aborted — otherwise it shows "thinking" forever
       if (fullText) {
         callbacks.onFinish(fullText)
-        resolve()
-        return
+      } else {
+        callbacks.onError('Request cancelled.')
       }
+    }
+  }
+  abortSignal?.addEventListener('abort', handleAbort, { once: true })
 
-      const stderrSummary = stderrBuffer
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .filter(Boolean)
-        .join('\n')
-
-      reject(new Error(stderrSummary || `Claude Code exited without a response (code ${code ?? 'unknown'}).`))
+  try {
+    await cp.submitPrompt(tabId, requestId, {
+      prompt,
+      projectPath: resolvedCwd,
     })
-  })
+  } catch (err) {
+    // If the run failed and we haven't notified the UI yet, do it now
+    if (!settled) {
+      settled = true
+      callbacks.onError(err instanceof Error ? err.message : String(err))
+    }
+  } finally {
+    // If we somehow got here without settling (edge case), finalize
+    if (!settled) {
+      settled = true
+      if (fullText) {
+        callbacks.onFinish(fullText)
+      }
+    }
+    cp.removeListener('event', onEvent)
+    cp.removeListener('error', onError)
+    abortSignal?.removeEventListener('abort', handleAbort)
+  }
 }
 
 // ── OpenCode CLI Harness ─────────────────────────────────────────────────────
@@ -1913,7 +1947,8 @@ export async function streamAiResponse(
 ): Promise<void> {
   const settings = settingsStore.get()
   const resolvedProvider = provider || settings.aiProvider || 'codex'
-  console.log(`[OmniCue] Provider: ${resolvedProvider}, Permissions: ${permissions}, CWD: ${cwd}`)
+  console.error(`[DIAG] streamAiResponse called | provider=${resolvedProvider} cwd=${cwd} sessionId=${sessionId}`)
+  debugLog(`Provider: ${resolvedProvider}, Permissions: ${permissions}, CWD: ${cwd}`)
 
   // ── Resume graft injection ──────────────────────────────────────────────
   // If this is a resumed conversation with a saved capsule, generate and inject
@@ -1949,7 +1984,7 @@ export async function streamAiResponse(
     if (claudeStatus.authenticated) {
       // Tier 1: Claude Code CLI (uses Max/Pro subscription) — no model override, CLI picks its own
       try {
-        await streamViaClaudeCodeCli(messages, callbacks, abortSignal, undefined, cwd, permissions)
+        await streamViaClaudeCodeCli(messages, callbacks, abortSignal, undefined, cwd, permissions, sessionId)
         return
       } catch (cliErr) {
         const cliMsg = cliErr instanceof Error ? cliErr.message : String(cliErr)

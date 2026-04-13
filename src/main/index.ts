@@ -7,7 +7,7 @@ import { startServer } from './server'
 import { startScheduler } from './scheduler'
 import { overlayState } from './overlayState'
 import { settingsStore } from './store'
-import { cleanupAllTempImages, activeChildPids } from './ai'
+import { cleanupAllTempImages, activeChildPids, shutdownClaudeControlPlane } from './ai'
 import { cacheActiveWindow, cleanupActiveWindowScript, getActiveWindowAsync } from './activeWindow'
 import { cleanupActionScripts } from './actions'
 import { recordFocus } from './context/focus-history'
@@ -376,6 +376,8 @@ app.on('will-quit', () => {
   cleanupAllTempImages().catch(() => {})
   cleanupActiveWindowScript()
   cleanupActionScripts()
+  // Shut down Claude Code ControlPlane (kills active runs, stops permission server)
+  shutdownClaudeControlPlane()
   // Kill any surviving CLI child processes to prevent orphans
   for (const pid of activeChildPids) {
     try {

@@ -5,7 +5,7 @@ import * as path from 'path'
 import { exec, execSync } from 'child_process'
 import { settingsStore, historyStore, alarmsStore, remindersStore, watchersStore, type Watcher } from './store'
 import { overlayState } from './overlayState'
-import { streamAiResponse, cleanupSession, type ChatMessage } from './ai'
+import { streamAiResponse, cleanupSession, getClaudeControlPlane, type ChatMessage } from './ai'
 import { resolveProjectCwd } from './resolveProjectCwd'
 import { resolvePendingRequest, cancelPendingRequestsForSession } from './agent-interactions'
 import { extractTextFromScreenshot } from './ocr'
@@ -501,8 +501,9 @@ export function registerIpcHandlers(): void {
         conversationId?: string
       }
     ): Promise<{ ok: boolean }> => {
+      console.error(`[DIAG] ai:send-message received | provider=${payload.provider} sessionId=${payload.sessionId} msgCount=${payload.messages?.length}`)
       const win = BrowserWindow.fromWebContents(event.sender)
-      if (!win) return { ok: false }
+      if (!win) { console.error('[DIAG] ai:send-message — no window!'); return { ok: false } }
 
       const captureSessionMemorySnapshot = async () => {
         try {
@@ -706,6 +707,30 @@ export function registerIpcHandlers(): void {
     cancelPendingRequestsForSession(payload.sessionId)
     activeStreams.delete(payload.sessionId)
     cleanupSession(payload.sessionId)
+  })
+
+  // ─── Claude Code ControlPlane IPC ─────────────────────────────────────────
+
+  // Respond to a Claude Code permission request (from PermissionServer hook)
+  ipcMain.handle('claude:respond-permission', (_event, payload: {
+    tabId: string
+    questionId: string
+    optionId: string
+  }) => {
+    const cp = getClaudeControlPlane()
+    return cp.respondToPermission(payload.tabId, payload.questionId, payload.optionId)
+  })
+
+  // Get Claude Code health report
+  ipcMain.handle('claude:health', () => {
+    const cp = getClaudeControlPlane()
+    return cp.getHealth()
+  })
+
+  // Set Claude Code permission mode (ask / auto)
+  ipcMain.on('claude:set-permission-mode', (_event, mode: string) => {
+    const cp = getClaudeControlPlane()
+    cp.setPermissionMode(mode as 'ask' | 'auto')
   })
 
   // ─── Clipboard ──────────────────────────────────────────────────────────────

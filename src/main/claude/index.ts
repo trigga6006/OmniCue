@@ -1,0 +1,7 @@
+export { ClaudeControlPlane } from './control-plane'
+export { ClaudeRunManager } from './run-manager'
+export { PermissionServer } from './permission-server'
+export { StreamParser } from './stream-parser'
+export { normalize } from './event-normalizer'
+export { findClaudeBinary, getCliEnv, needsShell } from './cli-env'
+export { debugLog } from './logger'

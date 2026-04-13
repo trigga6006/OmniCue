@@ -383,6 +383,11 @@ export interface ElectronAPI {
   osOpenUrl: (url: string) => Promise<{ ok: boolean; error?: string }>
   osRunSystemCommand: (command: string) => Promise<{ ok: boolean; error?: string }>
 
+  // ─── Claude Code ControlPlane ────────────────────────────────────────────
+  claudeRespondPermission: (payload: { tabId: string; questionId: string; optionId: string }) => Promise<boolean>
+  claudeGetHealth: () => Promise<unknown>
+  claudeSetPermissionMode: (mode: string) => void
+
   // ─── Watchers ────────────────────────────────────────────────────────────
   createWatcher: (watcher: WatcherConfig) => Promise<void>
   listWatchers: () => Promise<WatcherConfig[]>
