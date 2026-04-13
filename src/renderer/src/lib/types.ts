@@ -344,6 +344,7 @@ export interface ElectronAPI {
   sendAiMessage: (payload: { messages: unknown[]; sessionId: string; provider?: string; resumeMode?: 'normal' | 'replay-seed'; conversationId?: string }) => Promise<{ ok: boolean }>
   abortAiStream: (sessionId: string) => void
   cleanupAiSession: (sessionId: string) => void
+  onAiInitializing: (cb: (data: { sessionId: string }) => void) => () => void
   onAiStreamToken: (cb: (data: { sessionId: string; token: string }) => void) => () => void
   onAiStreamDone: (cb: (data: { sessionId: string; fullText: string }) => void) => () => void
   onAiStreamError: (cb: (data: { sessionId: string; error: string }) => void) => () => void
