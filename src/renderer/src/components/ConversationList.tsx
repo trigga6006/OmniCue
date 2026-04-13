@@ -21,6 +21,7 @@ export const ConversationList = memo(function ConversationList() {
   const [conversations, setConversations] = useState<ConversationSummary[]>([])
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editTitle, setEditTitle] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
   const editRef = useRef<HTMLInputElement>(null)
   const currentConvoId = useCompanionStore((s) => s.conversationId)
   const isStreaming = useCompanionStore((s) => s.isStreaming)
@@ -54,9 +55,14 @@ export const ConversationList = memo(function ConversationList() {
     // Dismiss preview on click
     cancelDismiss()
     setPreviewId(null)
-    if (isStreaming || id === currentConvoId) return
-    await useCompanionStore.getState().loadConversation(id)
-  }, [isStreaming, currentConvoId, cancelDismiss])
+    if (isStreaming || isLoading || id === currentConvoId) return
+    setIsLoading(true)
+    try {
+      await useCompanionStore.getState().loadConversation(id)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [isStreaming, isLoading, currentConvoId, cancelDismiss])
 
   const handleDelete = useCallback(async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()

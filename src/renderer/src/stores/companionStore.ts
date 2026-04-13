@@ -204,6 +204,25 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
     return { visible: true, showingAll: false }
   }),
   open: async () => {
+    // Recover from orphaned streaming state — if the panel was closed mid-stream
+    // and the stream finished (or errored) while listeners were active globally,
+    // isStreaming should already be false. But if it's still true, the stream was
+    // orphaned (e.g. IPC failure before global listeners existed). Reset it so the
+    // user doesn't see a stuck "thinking" spinner.
+    const current = get()
+    if (current.isStreaming && current.streamingMessageId) {
+      const streamMsg = current.messages.find((m) => m.id === current.streamingMessageId)
+      // If the streaming message has no content after being created, it's stuck
+      if (streamMsg && !streamMsg.content) {
+        set({
+          isStreaming: false,
+          streamingMessageId: null,
+          // Remove the empty assistant message so it doesn't show as a blank bubble
+          messages: current.messages.filter((m) => m.id !== current.streamingMessageId),
+        })
+      }
+    }
+
     const token = beginTransition()
     const release = suppressRegionPublish()
     replacePendingRelease('open', release)
@@ -223,7 +242,13 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
     // Panel mounts → Framer Motion enter animation runs.
     // Suppression is released by CompanionPanel's onAnimationComplete
     // via releasePanelOpenTransition().
-    set({ visible: true, showingAll: false, panelSizeMode: 'compact' as PanelSizeMode })
+    set({
+      visible: true,
+      showingAll: false,
+      panelSizeMode: 'compact' as PanelSizeMode,
+      showConversationList: false,
+      showNotesList: false,
+    })
   },
   close: () => set((s) => ({
     visible: false,

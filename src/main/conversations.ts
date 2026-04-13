@@ -123,7 +123,30 @@ function stripMessage(msg: Record<string, unknown>): StoredMessage {
 
 // ── Public API ───────────────────────────────────────────────────────────────
 
+/** Validate the index on first access — rebuilds if stale entries exist. */
+let _indexValidated = false
+
+function validateIndexOnce(): void {
+  if (_indexValidated) return
+  _indexValidated = true
+
+  ensureDir()
+  const index = readIndex()
+  // Check if any indexed conversations are missing from disk
+  const hasMissing = index.some((c) => {
+    try {
+      return !existsSync(join(convoDir, `${c.id}.json`))
+    } catch {
+      return true
+    }
+  })
+  if (hasMissing) {
+    rebuildIndex()
+  }
+}
+
 export function listConversations(): ConversationSummary[] {
+  validateIndexOnce()
   const index = readIndex()
   // Sort newest first
   index.sort((a, b) => b.updatedAt - a.updatedAt)

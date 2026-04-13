@@ -12,6 +12,7 @@ import type { HistoryEntry } from '@/lib/types'
 import { generateId } from '@/lib/utils'
 import { useGlobalClickThrough } from '@/hooks/useClickThrough'
 import { useBrightnessSampler } from '@/hooks/useBrightnessSampler'
+import { useAiStreamListeners } from '@/hooks/useAiStreamListeners'
 import { FullScreenAlert } from '@/components/FullScreenAlert'
 import { CompanionPanel } from '@/components/CompanionPanel'
 import { useCompanionStore } from '@/stores/companionStore'
@@ -31,6 +32,7 @@ const PANEL_HEIGHT = 500
 export default function App() {
   useGlobalClickThrough()
   useBrightnessSampler()
+  useAiStreamListeners()
 
   const timers = useTimerStore((s) => s.timers)
   const addTimer = useTimerStore((s) => s.addTimer)

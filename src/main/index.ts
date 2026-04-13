@@ -258,6 +258,24 @@ function startCursorPolling(win: BrowserWindow): void {
 // Allow audio to play without user gesture (for timer chime)
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 
+// ── Single-instance lock ──────────────────────────────────────────────────
+// Prevent duplicate overlay windows when the installed app is launched again
+// while already running in the tray.
+const gotLock = app.requestSingleInstanceLock()
+
+if (!gotLock) {
+  // Another instance is already running — quit immediately
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // Focus the existing overlay when a second launch is attempted
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (!mainWindow.isVisible()) mainWindow.show()
+      mainWindow.focus()
+    }
+  })
+}
+
 app.whenReady().then(() => {
   // Prune stale session memory on startup
   try { pruneSessionMemory() } catch { /* best-effort */ }

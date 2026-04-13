@@ -87,17 +87,25 @@ async function tryIntentResolution(text: string, conversationId?: string): Promi
  * Resolves OCR, builds messages, routes model, and fires the stream.
  *
  * Key UX constraint: the user's message must appear immediately in the chat.
- * All async work (OCR resolution, intent resolution) happens after the
- * message is visible so the UI never stalls.
+ * addUserMessage is called first so the UI never stalls, then OCR and intent
+ * resolution happen before the AI payload is constructed.
  */
 export async function sendCompanionMessage(text: string): Promise<void> {
   const store = useCompanionStore.getState()
   if (store.isStreaming) return
 
-  // ── Step 1: Resolve OCR eagerly (usually already complete) ──────────────
+  // ── Step 1: Show user message immediately ───────────────────────────────
+  // The message appears in the chat right away. OCR text (if any) will be
+  // injected into the AI payload later — the stored message may lack it,
+  // but the user never sees OCR data so this is fine for the UI.
+  store.addUserMessage(text)
+
+  // ── Step 2: Resolve OCR (usually already complete) ──────────────────────
+  // This runs AFTER addUserMessage so the UI never stalls. The resolved OCR
+  // data is injected into the AI payload in Step 4 for the latest user message.
   const auto = store.autoScreenshot
   if (auto?.ocrId && !auto.ocrText) {
-    const ocr = await window.electronAPI.getOcrResult(auto.ocrId)
+    const ocr = await window.electronAPI.getOcrResult(auto.ocrId).catch(() => null)
     if (ocr) {
       auto.ocrText = ocr.ocrText
       auto.screenType = ocr.screenType
@@ -106,15 +114,12 @@ export async function sendCompanionMessage(text: string): Promise<void> {
 
   const manual = store.pendingScreenshot
   if (manual?.ocrId && !manual.ocrText) {
-    const ocr = await window.electronAPI.getOcrResult(manual.ocrId)
+    const ocr = await window.electronAPI.getOcrResult(manual.ocrId).catch(() => null)
     if (ocr) {
       manual.ocrText = ocr.ocrText
       manual.screenType = ocr.screenType
     }
   }
-
-  // ── Step 2: Show user message immediately ───────────────────────────────
-  store.addUserMessage(text)
 
   // ── Step 3: Try intent resolution (non-blocking from user's perspective)
   // The message is already visible, so the user sees their input right away.
@@ -126,7 +131,15 @@ export async function sendCompanionMessage(text: string): Promise<void> {
   // ── Step 4: Build messages and start AI streaming ───────────────────────
   const updatedMessages = useCompanionStore.getState().messages
 
-  const coreMessages = updatedMessages.map((m: ChatMessage) => {
+  // For the latest user message, the stored object may not have ocrText
+  // because addUserMessage ran before OCR resolved. Patch it in for the
+  // AI payload using the now-resolved autoScreenshot data.
+  const lastUserIndex = updatedMessages.length - 1 -
+    [...updatedMessages].reverse().findIndex((m) => m.role === 'user')
+  const resolvedOcr = auto?.ocrText
+  const resolvedScreenType = auto?.screenType
+
+  const coreMessages = updatedMessages.map((m: ChatMessage, idx: number) => {
     const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
 
     if (m.role === 'user' && m.screenshot) {
@@ -137,9 +150,13 @@ export async function sendCompanionMessage(text: string): Promise<void> {
       contentParts.push({ type: 'image_url', image_url: { url: m.manualScreenshot } })
     }
 
+    // For the latest user message, prefer the freshly-resolved OCR data
+    const ocrText = (idx === lastUserIndex && resolvedOcr) ? resolvedOcr : m.ocrText
+    const screenType = (idx === lastUserIndex && resolvedScreenType) ? resolvedScreenType : m.screenType
+
     let userText = m.content
-    if (m.role === 'user' && (m.ocrText || m.activeApp)) {
-      const ctx = formatDesktopContext(m)
+    if (m.role === 'user' && (ocrText || m.activeApp)) {
+      const ctx = formatDesktopContext({ ...m, ocrText, screenType })
       userText = `${ctx}\n\n${m.content}`
     }
 
@@ -148,7 +165,7 @@ export async function sendCompanionMessage(text: string): Promise<void> {
       return {
         role: m.role,
         content: contentParts,
-        ocrText: m.ocrText,
+        ocrText,
         screenshotTitle: m.screenshotTitle,
         manualScreenshotTitle: m.manualScreenshotTitle,
       }
@@ -157,7 +174,7 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     return {
       role: m.role,
       content: m.content,
-      ocrText: m.ocrText,
+      ocrText,
       screenshotTitle: m.screenshotTitle,
       manualScreenshotTitle: m.manualScreenshotTitle,
     }
@@ -183,11 +200,19 @@ export async function sendCompanionMessage(text: string): Promise<void> {
   const streamMsgId = generateId()
   store.startStreaming(streamMsgId)
 
-  window.electronAPI.sendAiMessage({
-    messages: coreMessages,
-    sessionId: currentStore.sessionId,
-    provider,
-    resumeMode,
-    conversationId: currentStore.conversationId,
-  })
+  try {
+    await window.electronAPI.sendAiMessage({
+      messages: coreMessages,
+      sessionId: currentStore.sessionId,
+      provider,
+      resumeMode,
+      conversationId: currentStore.conversationId,
+    })
+  } catch (err) {
+    // IPC invoke failed (e.g. serialization error) — reset streaming state
+    // so the UI doesn't get stuck in "thinking" forever.
+    useCompanionStore.getState().streamError(
+      `Failed to send message: ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
 }

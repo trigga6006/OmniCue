@@ -13,7 +13,6 @@ import { QuickActions } from './QuickActions'
 import { ConversationList } from './ConversationList'
 import { NotesList } from './NotesList'
 import { PANEL_SIZES } from '@/lib/constants'
-import { preferLargerPanelSize, resolvePanelSize } from '@/lib/resolvePanelSize'
 import { releasePanelOpenTransition, releasePanelSizeTransition } from '@/stores/companionStore'
 
 interface CompanionPanelProps {
@@ -33,7 +32,6 @@ export const CompanionPanel = memo(function CompanionPanel({
   const isStreaming = useCompanionStore((s) => s.isStreaming)
   const streamingMessageId = useCompanionStore((s) => s.streamingMessageId)
   const pendingScreenshot = useCompanionStore((s) => s.pendingScreenshot)
-  const sessionId = useCompanionStore((s) => s.sessionId)
   const newSession = useCompanionStore((s) => s.newSession)
   const panelSizeMode = useCompanionStore((s) => s.panelSizeMode)
   const sizeConfig = PANEL_SIZES[panelSizeMode]
@@ -61,64 +59,8 @@ export const CompanionPanel = memo(function CompanionPanel({
     setExpandedScreenshot({ image, title })
   }, [])
 
-  const growPanelForContent = useCallback((content: string) => {
-    const state = useCompanionStore.getState()
-    const nextSize = preferLargerPanelSize(state.panelSizeMode, resolvePanelSize(content))
-    if (nextSize !== state.panelSizeMode) {
-      state.transitionPanelSize(nextSize)
-    }
-  }, [])
-
-  // Wire up AI stream listeners
-  useEffect(() => {
-    if (!visible) return
-
-    const store = useCompanionStore.getState
-
-    const unsubToken = window.electronAPI.onAiStreamToken((data) => {
-      if (data.sessionId === store().sessionId) {
-        store().appendToken(data.token)
-        const state = store()
-        const streamingMessage = state.messages.find((message) => message.id === state.streamingMessageId)
-        if (streamingMessage?.content) {
-          growPanelForContent(streamingMessage.content)
-        }
-      }
-    })
-
-    const unsubDone = window.electronAPI.onAiStreamDone((data) => {
-      if (data.sessionId === store().sessionId) {
-        store().finishStreaming(data.fullText)
-        growPanelForContent(data.fullText)
-      }
-    })
-
-    const unsubError = window.electronAPI.onAiStreamError((data) => {
-      if (data.sessionId === store().sessionId) {
-        store().streamError(data.error)
-      }
-    })
-
-    const unsubTool = window.electronAPI.onAiToolUse((data) => {
-      if (data.sessionId === store().sessionId) {
-        store().addToolUse(data.toolName, data.toolInput)
-      }
-    })
-
-    const unsubInteraction = window.electronAPI.onAiInteractionRequest((data) => {
-      if (data.sessionId === store().sessionId) {
-        store().addInteractionRequest(data)
-      }
-    })
-
-    return () => {
-      unsubToken()
-      unsubDone()
-      unsubError()
-      unsubTool()
-      unsubInteraction()
-    }
-  }, [growPanelForContent, visible, sessionId])
+  // AI stream listeners are registered globally in useAiStreamListeners (App.tsx)
+  // so they persist regardless of panel visibility.
 
   useEffect(() => {
     if (!visible) {
