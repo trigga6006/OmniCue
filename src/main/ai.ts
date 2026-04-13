@@ -24,6 +24,8 @@ export interface AiStreamCallbacks {
   onError: (error: string) => void
   onToolUse?: (toolName: string, toolInput: string) => void
   onInteractionRequest?: (request: import('./agent-interactions').AgentInteractionRequest) => void
+  /** Emitted when a provider is performing session initialization (e.g. Codex subprocess + thread setup) */
+  onInitializing?: () => void
 }
 
 const SYSTEM_PROMPT = `You are OmniCue, a concise desktop AI companion. Be helpful, brief, and specific. Prefer bullet points and short paragraphs over walls of text. You may use Markdown formatting: bold, italic, inline code, fenced code blocks with language tags, lists, and headers. Keep formatting purposeful and avoid unnecessary decoration for simple answers.
@@ -391,6 +393,11 @@ class CodexAppServerClient {
     resumeMode: 'normal' | 'replay-seed' = 'normal',
     resumeGraftText?: string
   ): Promise<void> {
+    // Signal the renderer when Codex needs cold-start initialization
+    if (!this.initialized) {
+      callbacks.onInitializing?.()
+    }
+
     await this.ensureInitialized()
 
     const resolvedCwd = cwd || process.cwd()

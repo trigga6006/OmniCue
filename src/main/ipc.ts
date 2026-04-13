@@ -551,6 +551,12 @@ export function registerIpcHandlers(): void {
         payload.sessionId,
         payload.messages as ChatMessage[],
         {
+          onInitializing: () => {
+            if (!win.isDestroyed())
+              win.webContents.send('ai:initializing', {
+                sessionId: payload.sessionId,
+              })
+          },
           onToken: (token) => {
             if (!win.isDestroyed())
               win.webContents.send('ai:stream-token', {

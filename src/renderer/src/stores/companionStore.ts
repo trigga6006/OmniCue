@@ -83,6 +83,8 @@ interface CompanionState {
   visible: boolean
   messages: ChatMessage[]
   isStreaming: boolean
+  /** Whether the provider is performing cold-start initialization (e.g. Codex subprocess) */
+  isInitializing: boolean
   streamingMessageId: string | null
   sessionId: string
   /** Auto-captured on panel open — invisible to user, always sent as context */
@@ -118,6 +120,7 @@ interface CompanionState {
   open: () => void
   close: () => void
   addUserMessage: (content: string) => void
+  setInitializing: (initializing: boolean) => void
   startStreaming: (messageId: string) => void
   appendToken: (token: string) => void
   addToolUse: (toolName: string, toolInput: string) => void
@@ -169,6 +172,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
   visible: false,
   messages: [],
   isStreaming: false,
+  isInitializing: false,
   streamingMessageId: null,
   sessionId: generateId(),
   autoScreenshot: null,
@@ -302,6 +306,8 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
     debouncedSave()
   },
 
+  setInitializing: (initializing) => set({ isInitializing: initializing }),
+
   startStreaming: (messageId) => {
     const msg: ChatMessage = {
       id: messageId,
@@ -321,6 +327,8 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
       messages: s.messages.map((m) =>
         m.id === s.streamingMessageId ? { ...m, content: m.content + token } : m
       ),
+      // First token means initialization is done
+      isInitializing: false,
     })),
 
   addToolUse: (toolName, toolInput) =>
@@ -338,6 +346,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
         m.id === s.streamingMessageId ? { ...m, content: fullText } : m
       ),
       isStreaming: false,
+      isInitializing: false,
       streamingMessageId: null,
       // Clear replay-seed flag after successful first resumed turn
       requiresReplaySeed: false,
@@ -351,6 +360,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
         m.id === s.streamingMessageId ? { ...m, content: `Error: ${error}` } : m
       ),
       isStreaming: false,
+      isInitializing: false,
       streamingMessageId: null,
     }))
     debouncedSave()
@@ -387,6 +397,9 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
     window.electronAPI.cleanupAiSession(s.sessionId)
     set({
       messages: [],
+      isStreaming: false,
+      isInitializing: false,
+      streamingMessageId: null,
       sessionId: generateId(),
       conversationId: generateId(),
       conversationTitle: '',

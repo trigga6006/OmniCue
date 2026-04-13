@@ -55,11 +55,8 @@ function formatDesktopContext(m: ChatMessage): string {
 /**
  * Try resolving a short imperative message as a desktop intent before hitting the AI.
  * Returns true if the intent was handled (caller should skip AI streaming).
- */
-/**
- * Try resolving a short imperative message as a desktop intent before hitting the AI.
- * Returns true if the intent was handled (caller should skip AI streaming).
- * Note: the user message is already added to the store before this is called.
+ * Note: startStreaming has already been called, so we finishStreaming with the
+ * intent result rather than creating a new streaming message.
  */
 async function tryIntentResolution(text: string, conversationId?: string): Promise<boolean> {
   try {
@@ -73,8 +70,6 @@ async function tryIntentResolution(text: string, conversationId?: string): Promi
       ? explanation
       : `I can do that, but it needs confirmation: ${explanation}`
 
-    const msgId = generateId()
-    store.startStreaming(msgId)
     store.finishStreaming(detail)
     return true
   } catch {
@@ -86,23 +81,21 @@ async function tryIntentResolution(text: string, conversationId?: string): Promi
  * Shared send logic used by CompanionInput and quick actions.
  * Resolves OCR, builds messages, routes model, and fires the stream.
  *
- * Key UX constraint: the user's message must appear immediately in the chat.
- * addUserMessage is called first so the UI never stalls, then OCR and intent
- * resolution happen before the AI payload is constructed.
+ * Key UX constraint: the user's message AND the thinking animation must appear
+ * immediately. All async work (OCR, intent resolution, settings fetch) happens
+ * after both are visible so the UI never stalls.
  */
 export async function sendCompanionMessage(text: string): Promise<void> {
   const store = useCompanionStore.getState()
   if (store.isStreaming) return
 
-  // ── Step 1: Show user message immediately ───────────────────────────────
-  // The message appears in the chat right away. OCR text (if any) will be
-  // injected into the AI payload later — the stored message may lack it,
-  // but the user never sees OCR data so this is fine for the UI.
+  // ── Step 1: Show user message + thinking animation immediately ─────────
   store.addUserMessage(text)
 
+  const streamMsgId = generateId()
+  store.startStreaming(streamMsgId)
+
   // ── Step 2: Resolve OCR (usually already complete) ──────────────────────
-  // This runs AFTER addUserMessage so the UI never stalls. The resolved OCR
-  // data is injected into the AI payload in Step 4 for the latest user message.
   const auto = store.autoScreenshot
   if (auto?.ocrId && !auto.ocrText) {
     const ocr = await window.electronAPI.getOcrResult(auto.ocrId).catch(() => null)
@@ -121,66 +114,68 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     }
   }
 
-  // ── Step 3: Try intent resolution (non-blocking from user's perspective)
-  // The message is already visible, so the user sees their input right away.
+  // ── Step 3: Try intent resolution ──────────────────────────────────────
+  // Thinking animation is already visible. If the intent handles it,
+  // finishStreaming is called on the existing message.
   if (text.length < 200) {
     const handled = await tryIntentResolution(text, store.conversationId)
     if (handled) return
   }
 
-  // ── Step 4: Build messages and start AI streaming ───────────────────────
+  // ── Step 4: Build AI payload and send ──────────────────────────────────
   const updatedMessages = useCompanionStore.getState().messages
 
-  // For the latest user message, the stored object may not have ocrText
-  // because addUserMessage ran before OCR resolved. Patch it in for the
-  // AI payload using the now-resolved autoScreenshot data.
+  // For the latest user message, patch in freshly-resolved OCR data
   const lastUserIndex = updatedMessages.length - 1 -
     [...updatedMessages].reverse().findIndex((m) => m.role === 'user')
   const resolvedOcr = auto?.ocrText
   const resolvedScreenType = auto?.screenType
 
-  const coreMessages = updatedMessages.map((m: ChatMessage, idx: number) => {
-    const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
+  const coreMessages = updatedMessages
+    .filter((m) => m.id !== streamMsgId) // exclude the empty streaming placeholder
+    .map((m: ChatMessage) => {
+      const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
+      // Find position in the original (unfiltered) array for OCR patching
+      const isLatestUser = m.role === 'user' && updatedMessages.indexOf(m) === lastUserIndex
 
-    if (m.role === 'user' && m.screenshot) {
-      contentParts.push({ type: 'image_url', image_url: { url: m.screenshot } })
-    }
+      if (m.role === 'user' && m.screenshot) {
+        contentParts.push({ type: 'image_url', image_url: { url: m.screenshot } })
+      }
 
-    if (m.role === 'user' && m.manualScreenshot) {
-      contentParts.push({ type: 'image_url', image_url: { url: m.manualScreenshot } })
-    }
+      if (m.role === 'user' && m.manualScreenshot) {
+        contentParts.push({ type: 'image_url', image_url: { url: m.manualScreenshot } })
+      }
 
-    // For the latest user message, prefer the freshly-resolved OCR data
-    const ocrText = (idx === lastUserIndex && resolvedOcr) ? resolvedOcr : m.ocrText
-    const screenType = (idx === lastUserIndex && resolvedScreenType) ? resolvedScreenType : m.screenType
+      const ocrText = (isLatestUser && resolvedOcr) ? resolvedOcr : m.ocrText
+      const screenType = (isLatestUser && resolvedScreenType) ? resolvedScreenType : m.screenType
 
-    let userText = m.content
-    if (m.role === 'user' && (ocrText || m.activeApp)) {
-      const ctx = formatDesktopContext({ ...m, ocrText, screenType })
-      userText = `${ctx}\n\n${m.content}`
-    }
+      let userText = m.content
+      if (m.role === 'user' && (ocrText || m.activeApp)) {
+        const ctx = formatDesktopContext({ ...m, ocrText, screenType })
+        userText = `${ctx}\n\n${m.content}`
+      }
 
-    if (contentParts.length > 0 && m.role === 'user') {
-      contentParts.push({ type: 'text', text: userText })
+      if (contentParts.length > 0 && m.role === 'user') {
+        contentParts.push({ type: 'text', text: userText })
+        return {
+          role: m.role,
+          content: contentParts,
+          ocrText,
+          screenshotTitle: m.screenshotTitle,
+          manualScreenshotTitle: m.manualScreenshotTitle,
+        }
+      }
+
       return {
         role: m.role,
-        content: contentParts,
+        content: m.content,
         ocrText,
         screenshotTitle: m.screenshotTitle,
         manualScreenshotTitle: m.manualScreenshotTitle,
       }
-    }
+    })
 
-    return {
-      role: m.role,
-      content: m.content,
-      ocrText,
-      screenshotTitle: m.screenshotTitle,
-      manualScreenshotTitle: m.manualScreenshotTitle,
-    }
-  })
-
-  // Get provider from settings (cached in store or fetched)
+  // Get provider from settings
   const settings = await window.electronAPI.getSettings()
   const configuredProvider: AiProvider = settings.aiProvider || 'codex'
 
@@ -189,16 +184,11 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     ? currentStore.conversationProvider
     : configuredProvider
 
-  // Track provider on the conversation for persistence
   if (currentStore.conversationProvider !== provider) {
     currentStore.setConversationProvider(provider)
   }
 
-  // Determine if this is a replay-seed send (restored Codex conversation)
   const resumeMode = provider === 'codex' && currentStore.requiresReplaySeed ? 'replay-seed' : 'normal'
-
-  const streamMsgId = generateId()
-  store.startStreaming(streamMsgId)
 
   try {
     await window.electronAPI.sendAiMessage({
@@ -209,8 +199,6 @@ export async function sendCompanionMessage(text: string): Promise<void> {
       conversationId: currentStore.conversationId,
     })
   } catch (err) {
-    // IPC invoke failed (e.g. serialization error) — reset streaming state
-    // so the UI doesn't get stuck in "thinking" forever.
     useCompanionStore.getState().streamError(
       `Failed to send message: ${err instanceof Error ? err.message : String(err)}`
     )

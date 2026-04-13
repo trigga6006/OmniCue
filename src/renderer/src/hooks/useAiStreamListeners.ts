@@ -23,6 +23,12 @@ export function useAiStreamListeners(): void {
       }
     }
 
+    const unsubInitializing = window.electronAPI.onAiInitializing((data) => {
+      if (data.sessionId === store().sessionId) {
+        store().setInitializing(true)
+      }
+    })
+
     const unsubToken = window.electronAPI.onAiStreamToken((data) => {
       if (data.sessionId === store().sessionId) {
         store().appendToken(data.token)
@@ -62,6 +68,7 @@ export function useAiStreamListeners(): void {
     })
 
     return () => {
+      unsubInitializing()
       unsubToken()
       unsubDone()
       unsubError()

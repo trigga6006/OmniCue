@@ -107,6 +107,14 @@ const electronAPI = {
   cleanupAiSession: (sessionId: string): void => {
     ipcRenderer.send('ai:cleanup-session', { sessionId })
   },
+  onAiInitializing: (
+    callback: (data: { sessionId: string }) => void
+  ): (() => void) => {
+    const handler = (_event: unknown, data: { sessionId: string }): void =>
+      callback(data)
+    ipcRenderer.on('ai:initializing', handler)
+    return () => ipcRenderer.removeListener('ai:initializing', handler)
+  },
   onAiStreamToken: (
     callback: (data: { sessionId: string; token: string }) => void
   ): (() => void) => {
