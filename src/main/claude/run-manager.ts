@@ -211,8 +211,8 @@ export class ClaudeRunManager extends EventEmitter {
         this.emit('normalized', requestId, evt)
       }
 
-      // Close stdin after result event — with stream-json input the process
-      // stays alive waiting for more input; closing stdin triggers clean exit.
+      // Close stdin after result — each run is one process.
+      // Session continuity is via --resume, not stdin reuse.
       if (raw.type === 'result') {
         debugLog(`RunManager: Run complete [${requestId}]`)
         try { child.stdin?.end() } catch { /* ignore */ }
