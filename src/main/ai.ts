@@ -2,7 +2,9 @@ import { randomUUID } from 'crypto'
 import { promises as fs } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
+import { spawn, execSync, type ChildProcessWithoutNullStreams } from 'child_process'
+import { existsSync } from 'fs'
+import { homedir } from 'os'
 import Anthropic from '@anthropic-ai/sdk'
 import { settingsStore } from './store'
 import { getCodexStatus } from './codex-auth'
@@ -26,6 +28,103 @@ export interface AiStreamCallbacks {
   onInteractionRequest?: (request: import('./agent-interactions').AgentInteractionRequest) => void
   /** Emitted when a provider is performing session initialization (e.g. Codex subprocess + thread setup) */
   onInitializing?: () => void
+}
+
+// ── Process tree kill ────────────────────────────────────────────────────────
+// On Windows, child.kill() only kills the immediate process (cmd.exe), leaving
+// grandchild processes (claude, codex) alive as orphans that hold lock files.
+// This helper kills the entire process tree via taskkill /T /F.
+
+/** Set of active child PIDs for cleanup on app exit. */
+export const activeChildPids = new Set<number>()
+
+function killProcessTree(child: ChildProcessWithoutNullStreams): void {
+  if (process.platform === 'win32' && child.pid) {
+    try {
+      spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], {
+        windowsHide: true,
+        stdio: 'ignore',
+      })
+    } catch { /* best effort */ }
+  } else {
+    try { child.kill() } catch { /* best effort */ }
+  }
+  if (child.pid) activeChildPids.delete(child.pid)
+}
+
+function trackChild(child: ChildProcessWithoutNullStreams): void {
+  if (child.pid) activeChildPids.add(child.pid)
+  child.on('close', () => { if (child.pid) activeChildPids.delete(child.pid) })
+}
+
+// ── CLI path resolution ──────────────────────────────────────────────────────
+// Resolve the actual binary path for CLI tools so we can spawn them directly
+// instead of going through cmd.exe (which breaks process tree kill on Windows).
+
+const cliPathCache = new Map<string, string | null>()
+
+function resolveCliPath(name: string): string | null {
+  if (cliPathCache.has(name)) return cliPathCache.get(name) || null
+
+  const home = homedir()
+  const knownLocations: Record<string, string[]> = {
+    claude: [
+      join(home, '.local', 'bin', 'claude.exe'),
+      join(home, '.local', 'bin', 'claude'),
+      join(home, 'AppData', 'Roaming', 'npm', 'claude.cmd'),
+    ],
+    codex: [
+      join(home, 'AppData', 'Roaming', 'npm', 'codex.cmd'),
+      join(home, '.local', 'bin', 'codex.exe'),
+      join(home, '.local', 'bin', 'codex'),
+    ],
+    opencode: [
+      join(home, 'AppData', 'Roaming', 'npm', 'opencode.cmd'),
+      join(home, '.local', 'bin', 'opencode.exe'),
+      join(home, '.local', 'bin', 'opencode'),
+    ],
+  }
+
+  // Check known locations first
+  for (const loc of knownLocations[name] || []) {
+    if (existsSync(loc)) {
+      cliPathCache.set(name, loc)
+      return loc
+    }
+  }
+
+  // Fall back to system lookup
+  try {
+    const cmd = process.platform === 'win32' ? `where ${name}` : `which ${name}`
+    const result = execSync(cmd, { encoding: 'utf-8', timeout: 5000, windowsHide: true }).trim()
+    const firstLine = result.split(/\r?\n/)[0]?.trim() || null
+    cliPathCache.set(name, firstLine)
+    return firstLine
+  } catch {
+    cliPathCache.set(name, null)
+    return null
+  }
+}
+
+/**
+ * Build a spawn command that avoids cmd.exe when possible.
+ * For .exe files, spawns directly. For .cmd shims, uses shell: true (no /d flag).
+ */
+function buildDirectSpawn(name: string, args: string[]): { command: string; args: string[]; options: { shell?: boolean } } {
+  const resolved = resolveCliPath(name)
+
+  if (resolved) {
+    // .cmd/.bat files need shell execution
+    if (/\.(cmd|bat)$/i.test(resolved)) {
+      return { command: resolved, args, options: { shell: true } }
+    }
+    // .exe or extensionless binary — spawn directly
+    return { command: resolved, args, options: {} }
+  }
+
+  // Not found in known locations — fall back to shell: true which does PATH lookup
+  // without the /d flag (so AutoRun can extend PATH if needed)
+  return { command: name, args, options: { shell: true } }
 }
 
 const SYSTEM_PROMPT = `You are OmniCue, a concise desktop AI companion. Be helpful, brief, and specific. Prefer bullet points and short paragraphs over walls of text. You may use Markdown formatting: bold, italic, inline code, fenced code blocks with language tags, lists, and headers. Keep formatting purposeful and avoid unnecessary decoration for simple answers.
@@ -359,18 +458,13 @@ async function cleanupTempImages(images: PreparedImage[]): Promise<void> {
   )
 }
 
-function getCodexExecCommand(): { command: string; args: string[] } {
+function getCodexExecCommand(): { command: string; args: string[]; shell?: boolean } {
+  const baseArgs = ['app-server', '--listen', 'stdio://']
   if (process.platform === 'win32') {
-    return {
-      command: process.env.ComSpec || 'cmd.exe',
-      args: ['/d', '/s', '/c', 'codex app-server --listen stdio://'],
-    }
+    const direct = buildDirectSpawn('codex', baseArgs)
+    return { command: direct.command, args: direct.args, shell: direct.options.shell }
   }
-
-  return {
-    command: 'codex',
-    args: ['app-server', '--listen', 'stdio://'],
-  }
+  return { command: 'codex', args: baseArgs }
 }
 
 class CodexAppServerClient {
@@ -557,15 +651,17 @@ class CodexAppServerClient {
   private startProcess(): void {
     if (this.child) return
 
-    const { command, args } = getCodexExecCommand()
-    const cwd = require('os').homedir()
-    console.log(`[OmniCue] Codex app-server spawn: ${command} ${args.join(' ')} (cwd: ${cwd})`)
+    const { command, args, shell } = getCodexExecCommand()
+    const cwd = homedir()
+    console.log(`[OmniCue] Codex app-server spawn: ${command} ${args.join(' ')} (cwd: ${cwd}, shell: ${!!shell})`)
     const child = spawn(command, args, {
       cwd,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
+      shell,
     })
+    trackChild(child)
 
     this.child = child
     this.stdoutBuffer = ''
@@ -1002,10 +1098,8 @@ function getCodexCliCommand(images: PreparedImage[], permissions: AgentPermissio
   baseArgs.push('-')
 
   if (process.platform === 'win32') {
-    return {
-      command: process.env.ComSpec || 'cmd.exe',
-      args: ['/d', '/s', '/c', `codex ${baseArgs.map(quoteForCmd).join(' ')}`],
-    }
+    const direct = buildDirectSpawn('codex', baseArgs)
+    return { command: direct.command, args: direct.args, shell: direct.options.shell }
   }
 
   return { command: 'codex', args: baseArgs }
@@ -1035,27 +1129,25 @@ async function streamViaCodexCliFallback(
     tempImages.push(await writeDataUrlToTempFile(latestImageDataUrl))
   }
 
-  const { command, args } = getCodexCliCommand(tempImages, permissions, modelOverride)
-  const resolvedCwd = cwd || require('os').homedir()
-  console.log(`[OmniCue] Codex CLI fallback spawn: ${command} ${args.join(' ')} (cwd: ${resolvedCwd})`)
+  const { command, args, shell } = getCodexCliCommand(tempImages, permissions, modelOverride)
+  const resolvedCwd = cwd || homedir()
+  console.log(`[OmniCue] Codex CLI fallback spawn: ${command} ${args.join(' ')} (cwd: ${resolvedCwd}, shell: ${!!shell})`)
 
   const child = spawn(command, args, {
     cwd: resolvedCwd,
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    shell,
   })
+  trackChild(child)
 
   let stdoutBuffer = ''
   let stderrBuffer = ''
   let finalText = ''
 
   const handleAbort = (): void => {
-    try {
-      child.kill()
-    } catch {
-      // Ignore abort race conditions.
-    }
+    killProcessTree(child)
   }
 
   abortSignal?.addEventListener('abort', handleAbort, { once: true })
@@ -1312,10 +1404,8 @@ function getClaudeCliCommand(permissions: AgentPermissions = 'read-only'): { com
   }
 
   if (process.platform === 'win32') {
-    return {
-      command: process.env.ComSpec || 'cmd.exe',
-      args: ['/d', '/s', '/c', `claude ${baseArgs.map(quoteForCmd).join(' ')}`],
-    }
+    const direct = buildDirectSpawn('claude', baseArgs)
+    return { command: direct.command, args: direct.args, shell: direct.options.shell }
   }
 
   return { command: 'claude', args: baseArgs }
@@ -1333,16 +1423,18 @@ async function streamViaClaudeCodeCli(
   // screenshot context as text only and avoid promising native OmniCue pickers.
   const prompt = buildNonInteractivePrompt(messages)
 
-  const { command, args } = getClaudeCliCommand(permissions)
-  const resolvedCwd = cwd || require('os').homedir()
-  console.log(`[OmniCue] Claude CLI spawn: ${command} ${args.join(' ')} (cwd: ${resolvedCwd})`)
+  const { command, args, shell } = getClaudeCliCommand(permissions)
+  const resolvedCwd = cwd || homedir()
+  console.log(`[OmniCue] Claude CLI spawn: ${command} ${args.join(' ')} (cwd: ${resolvedCwd}, shell: ${!!shell})`)
 
   const child = spawn(command, args, {
     cwd: resolvedCwd,
     env: process.env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    shell,
   })
+  trackChild(child)
 
   let stdoutBuffer = ''
   let stderrBuffer = ''
@@ -1352,11 +1444,7 @@ async function streamViaClaudeCodeCli(
   let currentToolInput = ''
 
   const handleAbort = (): void => {
-    try {
-      child.kill()
-    } catch {
-      // Ignore abort race conditions.
-    }
+    killProcessTree(child)
   }
 
   abortSignal?.addEventListener('abort', handleAbort, { once: true })
@@ -1488,11 +1576,8 @@ function getOpenCodeCommand(model?: string, cwd?: string): { command: string; ar
   }
 
   if (process.platform === 'win32') {
-    return {
-      command: process.env.ComSpec || 'cmd.exe',
-      args: ['/d', '/s', '/c', `opencode ${baseArgs.map(quoteForCmd).join(' ')}`],
-      env,
-    }
+    const direct = buildDirectSpawn('opencode', baseArgs)
+    return { command: direct.command, args: direct.args, env, shell: direct.options.shell }
   }
 
   return { command: 'opencode', args: baseArgs, env }
@@ -1506,21 +1591,23 @@ async function streamViaOpenCodeCli(
   cwd?: string
 ): Promise<void> {
   const prompt = buildNonInteractivePrompt(messages)
-  const { command, args, env } = getOpenCodeCommand(undefined, cwd)
+  const { command, args, env, shell } = getOpenCodeCommand(undefined, cwd)
 
   const child = spawn(command, args, {
-    cwd: cwd || process.cwd(),
+    cwd: cwd || homedir(),
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    shell,
   })
+  trackChild(child)
 
   let stdoutBuffer = ''
   let stderrBuffer = ''
   let fullText = ''
 
   const handleAbort = (): void => {
-    try { child.kill() } catch { /* ignore */ }
+    killProcessTree(child)
   }
   abortSignal?.addEventListener('abort', handleAbort, { once: true })
   child.stdin.end(prompt)
@@ -1604,11 +1691,8 @@ function getKimiCodeCommand(): { command: string; args: string[]; env: Record<st
   }
 
   if (process.platform === 'win32') {
-    return {
-      command: process.env.ComSpec || 'cmd.exe',
-      args: ['/d', '/s', '/c', `kimi ${baseArgs.map(quoteForCmd).join(' ')}`],
-      env,
-    }
+    const direct = buildDirectSpawn('kimi', baseArgs)
+    return { command: direct.command, args: direct.args, env, shell: direct.options.shell }
   }
 
   return { command: 'kimi', args: baseArgs, env }
@@ -1622,24 +1706,26 @@ async function streamViaKimiCodeCli(
   cwd?: string
 ): Promise<void> {
   const prompt = buildNonInteractivePrompt(messages)
-  const { command, args, env } = getKimiCodeCommand()
+  const { command, args, env, shell } = getKimiCodeCommand()
 
   // Append the prompt via -p flag
   args.push('-p', prompt)
 
   const child = spawn(command, args, {
-    cwd: cwd || process.cwd(),
+    cwd: cwd || homedir(),
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
+    shell,
   })
+  trackChild(child)
 
   let stdoutBuffer = ''
   let stderrBuffer = ''
   let fullText = ''
 
   const handleAbort = (): void => {
-    try { child.kill() } catch { /* ignore */ }
+    killProcessTree(child)
   }
   abortSignal?.addEventListener('abort', handleAbort, { once: true })
 

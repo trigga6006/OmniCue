@@ -7,7 +7,7 @@ import { startServer } from './server'
 import { startScheduler } from './scheduler'
 import { overlayState } from './overlayState'
 import { settingsStore } from './store'
-import { cleanupAllTempImages } from './ai'
+import { cleanupAllTempImages, activeChildPids } from './ai'
 import { cacheActiveWindow, cleanupActiveWindowScript, getActiveWindowAsync } from './activeWindow'
 import { cleanupActionScripts } from './actions'
 import { recordFocus } from './context/focus-history'
@@ -376,6 +376,18 @@ app.on('will-quit', () => {
   cleanupAllTempImages().catch(() => {})
   cleanupActiveWindowScript()
   cleanupActionScripts()
+  // Kill any surviving CLI child processes to prevent orphans
+  for (const pid of activeChildPids) {
+    try {
+      if (process.platform === 'win32') {
+        require('child_process').spawn('taskkill', ['/T', '/F', '/PID', String(pid)], {
+          windowsHide: true, stdio: 'ignore',
+        })
+      } else {
+        process.kill(pid)
+      }
+    } catch { /* process already exited */ }
+  }
 })
 
 app.on('window-all-closed', () => {
