@@ -152,6 +152,15 @@ export async function resolveLLM(
   snapshot: DesktopSnapshot,
   capsule?: ResumeCapsule
 ): Promise<ActionPlan> {
+  // Skip LLM fallback for CLI-based providers — spawning a whole claude/codex
+  // process just for intent classification adds 5-10s of latency per message.
+  // The rule-based pipeline handles common intents; unresolved ones go straight to the AI.
+  const { settingsStore } = require('../store')
+  const provider = settingsStore.get().aiProvider
+  if (provider === 'claude' || provider === 'codex' || provider === 'opencode' || provider === 'kimicode') {
+    return buildFallbackPlan(intent)
+  }
+
   const prompt = buildPrompt(intent, referents, snapshot, capsule)
 
   const response = await singleShotCompletion(prompt)

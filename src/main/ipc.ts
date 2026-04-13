@@ -501,9 +501,8 @@ export function registerIpcHandlers(): void {
         conversationId?: string
       }
     ): Promise<{ ok: boolean }> => {
-      console.error(`[DIAG] ai:send-message received | provider=${payload.provider} sessionId=${payload.sessionId} msgCount=${payload.messages?.length}`)
       const win = BrowserWindow.fromWebContents(event.sender)
-      if (!win) { console.error('[DIAG] ai:send-message — no window!'); return { ok: false } }
+      if (!win) return { ok: false }
 
       const captureSessionMemorySnapshot = async () => {
         try {
@@ -511,6 +510,14 @@ export function registerIpcHandlers(): void {
         } catch {
           return undefined
         }
+      }
+
+      // Kill any existing stream for this session immediately — prevents
+      // ghost/duplicate runs from wasting 5+ seconds before the real run starts
+      const existing = activeStreams.get(payload.sessionId)
+      if (existing) {
+        existing.abort()
+        activeStreams.delete(payload.sessionId)
       }
 
       const controller = new AbortController()
