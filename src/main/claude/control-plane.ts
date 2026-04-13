@@ -381,8 +381,9 @@ export class ClaudeControlPlane extends EventEmitter {
       options = { ...options, sessionId: tab.claudeSessionId }
     }
 
-    // Per-run token lifecycle
-    if (this.permissionServer.getPort()) {
+    // Per-run token lifecycle — skip the permission hook when full-access,
+    // otherwise the PreToolUse hook overrides --dangerously-skip-permissions.
+    if (this.permissionServer.getPort() && options.permissionMode !== 'full-access') {
       const runToken = this.permissionServer.registerRun(tabId, requestId, options.sessionId || null)
       this.runTokens.set(requestId, runToken)
       const hookSettingsPath = this.permissionServer.generateSettingsFile(runToken)

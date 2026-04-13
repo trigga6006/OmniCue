@@ -184,6 +184,8 @@ export interface ClaudeRunOptions {
   model?: string
   hookSettingsPath?: string
   addDirs?: string[]
+  permissionMode?: 'read-only' | 'workspace-write' | 'full-access'
+  appendSystemPrompt?: string
 }
 
 // ─── Permission Types ───

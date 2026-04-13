@@ -167,8 +167,16 @@ export async function extractTextFromScreenshot(
     await fs.writeFile(tempPath, Buffer.from(match[2], 'base64'))
 
     // Dynamic import to avoid crash on non-Windows platforms
-    const { recognizeBatchFromPath } = await import('node-windows-ocr')
-    const results = await recognizeBatchFromPath([tempPath])
+    const ocr = await import('node-windows-ocr')
+    // In packaged builds, the OCR exe is inside app.asar.unpacked but the
+    // bundled __dirname resolves to app.asar. Use a runtime require.resolve
+    // (not the bundler-transformed one) to find the real path and fix it.
+    const rr = typeof globalThis.require?.resolve === 'function'
+      ? globalThis.require.resolve
+      : require.resolve
+    const resolved = rr('node-windows-ocr')
+    const moduleRoot = resolved.replace('app.asar', 'app.asar.unpacked').replace(/[\\/]dist[\\/]index\.\w+$/, '')
+    const results = await ocr.recognizeBatchFromPath([tempPath], { moduleRoot })
 
     if (!results || results.length === 0 || !results[0].Result) {
       return { text: '', lines: [], screenType: 'unknown', durationMs: Date.now() - start }

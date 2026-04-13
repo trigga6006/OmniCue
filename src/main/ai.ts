@@ -1431,7 +1431,11 @@ async function streamViaClaudeCodeCli(
   sessionId?: string
 ): Promise<void> {
   console.error(`[DIAG] streamViaClaudeCodeCli ENTERED | cwd=${cwd} sessionId=${sessionId}`)
-  const prompt = buildNonInteractivePrompt(messages)
+  // For Claude Code CLI: send only the latest user message as the prompt.
+  // System instructions and desktop tools go via --append-system-prompt so
+  // they become part of Claude Code's actual system context.
+  const lastUserMessage = [...messages].reverse().find(m => m.role === 'user')
+  const prompt = lastUserMessage ? getTextContent(lastUserMessage.content) || '' : ''
   console.error(`[DIAG] prompt built | length=${prompt.length}`)
   const resolvedCwd = cwd || homedir()
   const cp = getClaudeControlPlane()
@@ -1559,6 +1563,8 @@ async function streamViaClaudeCodeCli(
     await cp.submitPrompt(tabId, requestId, {
       prompt,
       projectPath: resolvedCwd,
+      permissionMode: settingsStore.get().agentPermissions || 'read-only',
+      appendSystemPrompt: `${SYSTEM_PROMPT}\n\n${NON_INTERACTIVE_SESSION_INSTRUCTIONS}\n\n${DESKTOP_TOOLS_PROMPT}`,
     })
   } catch (err) {
     // If the run failed and we haven't notified the UI yet, do it now

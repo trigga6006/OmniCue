@@ -98,8 +98,17 @@ export class ClaudeRunManager extends EventEmitter {
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
-      '--permission-mode', 'default',
     ]
+
+    // Permission mode: full-access uses --dangerously-skip-permissions,
+    // otherwise use --permission-mode with the appropriate value.
+    if (options.permissionMode === 'full-access') {
+      args.push('--dangerously-skip-permissions')
+    } else if (options.permissionMode === 'workspace-write') {
+      args.push('--permission-mode', 'plan')
+    } else {
+      args.push('--permission-mode', 'default')
+    }
 
     if (options.sessionId) {
       args.push('--resume', options.sessionId)
@@ -141,8 +150,12 @@ export class ClaudeRunManager extends EventEmitter {
       args.push('--system-prompt', options.systemPrompt)
     }
 
-    // Always tell Claude it's inside OmniCue
-    args.push('--append-system-prompt', OMNICUE_SYSTEM_HINT)
+    // Always tell Claude it's inside OmniCue, plus any caller-provided system context
+    const systemParts = [OMNICUE_SYSTEM_HINT]
+    if (options.appendSystemPrompt) {
+      systemParts.push(options.appendSystemPrompt)
+    }
+    args.push('--append-system-prompt', systemParts.join('\n\n'))
 
     debugLog(`RunManager: Starting run ${requestId}: ${this.claudeBinary} (cwd: ${cwd})`)
     debugLog(`RunManager: Args: ${args.map((a, i) => `[${i}]=${a.substring(0, 80)}`).join(' ')}`)
