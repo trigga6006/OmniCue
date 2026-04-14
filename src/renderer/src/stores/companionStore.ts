@@ -79,6 +79,45 @@ interface ScreenshotData {
   packVariant?: string
 }
 
+function resolveScreenshotOcrInBackground(
+  key: 'autoScreenshot' | 'pendingScreenshot',
+  screenshot: ScreenshotData
+): void {
+  if (!screenshot.ocrId) return
+
+  window.electronAPI.getOcrResult(screenshot.ocrId).then((ocr) => {
+    if (!ocr) return
+    const current = useCompanionStore.getState()[key]
+    if (current && current.ocrId === screenshot.ocrId) {
+      useCompanionStore.setState({
+        [key]: { ...current, ocrText: ocr.ocrText, screenType: ocr.screenType }
+      } as Pick<CompanionState, typeof key>)
+    }
+  })
+}
+
+type ConversationStateSlice = Pick<
+  CompanionState,
+  | 'isStreaming'
+  | 'isInitializing'
+  | 'streamingMessageId'
+  | 'messages'
+  | 'conversationId'
+  | 'conversationTitle'
+  | 'conversationProvider'
+  | 'sessionId'
+  | 'restoredFromHistory'
+  | 'requiresReplaySeed'
+  | 'autoScreenshot'
+  | 'pendingScreenshot'
+  | 'viewHorizon'
+  | 'showingAll'
+  | 'panelSizeMode'
+  | 'pendingInteractions'
+  | 'showConversationList'
+  | 'showNotesList'
+>
+
 interface CompanionState {
   visible: boolean
   messages: ChatMessage[]
@@ -115,6 +154,8 @@ interface CompanionState {
   showNotesList: boolean
   /** Provider used for this conversation (for persistence) */
   conversationProvider: string
+  /** Conversation that should survive close/reopen for the overlay */
+  pinnedConversationId: string | null
 
   toggle: () => void
   open: () => void
@@ -148,6 +189,7 @@ interface CompanionState {
   toggleConversationList: () => void
   toggleNotesList: () => void
   setConversationProvider: (provider: string) => void
+  toggleConversationPin: () => Promise<void>
 }
 
 // ── Auto-save helper (debounced) ────────────────────────────────────────────
@@ -163,9 +205,47 @@ function debouncedSave(): void {
       id: s.conversationId,
       title: s.conversationTitle,
       provider: s.conversationProvider,
-      messages: s.messages,
+      messages: s.messages
     })
   }, 500)
+}
+
+function saveConversationSnapshot(
+  state: Pick<
+    CompanionState,
+    'messages' | 'conversationId' | 'conversationTitle' | 'conversationProvider'
+  >
+): void {
+  if (state.messages.length === 0) return
+  window.electronAPI.saveConversation({
+    id: state.conversationId,
+    title: state.conversationTitle,
+    provider: state.conversationProvider,
+    messages: state.messages
+  })
+}
+
+function createFreshConversationState(): ConversationStateSlice {
+  return {
+    messages: [],
+    isInitializing: false,
+    isStreaming: false,
+    streamingMessageId: null,
+    sessionId: generateId(),
+    conversationId: generateId(),
+    conversationTitle: '',
+    restoredFromHistory: false,
+    requiresReplaySeed: false,
+    conversationProvider: '',
+    autoScreenshot: null,
+    pendingScreenshot: null,
+    viewHorizon: 0,
+    showingAll: false,
+    panelSizeMode: 'compact' as PanelSizeMode,
+    pendingInteractions: [],
+    showConversationList: false,
+    showNotesList: false
+  }
 }
 
 export const useCompanionStore = create<CompanionState>((set, get) => ({
@@ -191,29 +271,32 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
   showConversationList: false,
   showNotesList: false,
   conversationProvider: '',
+  pinnedConversationId: null,
 
-  toggle: () => set((s) => {
-    if (s.visible) {
-      // When closing during streaming, preserve viewHorizon so the current exchange
-      // stays visible when the panel is reopened
-      return {
-        visible: false,
-        viewHorizon: s.isStreaming ? s.viewHorizon : s.messages.length,
-        showingAll: s.isStreaming ? s.showingAll : false,
-        pendingScreenshot: null,
-        showConversationList: false,
-        showNotesList: false,
+  toggle: () =>
+    set((s) => {
+      if (s.visible) {
+        const isPinnedConversation = s.pinnedConversationId === s.conversationId
+        // When closing during streaming, preserve viewHorizon so the current exchange
+        // stays visible when the panel is reopened
+        return {
+          visible: false,
+          viewHorizon: isPinnedConversation || s.isStreaming ? s.viewHorizon : s.messages.length,
+          showingAll: isPinnedConversation || s.isStreaming ? s.showingAll : false,
+          pendingScreenshot: null,
+          showConversationList: false,
+          showNotesList: false
+        }
       }
-    }
-    return { visible: true, showingAll: false }
-  }),
+      return { visible: true, showingAll: false }
+    }),
   open: async () => {
     // Recover from orphaned streaming state — if the panel was closed mid-stream
     // and the stream finished (or errored) while listeners were active globally,
     // isStreaming should already be false. But if it's still true, the stream was
     // orphaned (e.g. IPC failure before global listeners existed). Reset it so the
     // user doesn't see a stuck "thinking" spinner.
-    const current = get()
+    let current = get()
     if (current.isStreaming && current.streamingMessageId) {
       const streamMsg = current.messages.find((m) => m.id === current.streamingMessageId)
       // If the streaming message has no content after being created, it's stuck
@@ -222,8 +305,58 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
           isStreaming: false,
           streamingMessageId: null,
           // Remove the empty assistant message so it doesn't show as a blank bubble
-          messages: current.messages.filter((m) => m.id !== current.streamingMessageId),
+          messages: current.messages.filter((m) => m.id !== current.streamingMessageId)
         })
+        current = get()
+      }
+    }
+
+    const settings = await window.electronAPI.getSettings()
+    const pinnedConversationId = settings.pinnedConversationId ?? null
+    if (current.pinnedConversationId !== pinnedConversationId) {
+      set({ pinnedConversationId })
+      current = get()
+    }
+
+    if (!current.isStreaming) {
+      if (pinnedConversationId) {
+        const shouldRestorePinned =
+          current.conversationId !== pinnedConversationId || current.messages.length === 0
+
+        if (shouldRestorePinned) {
+          if (current.messages.length > 0) {
+            saveConversationSnapshot(current)
+          }
+          window.electronAPI.cleanupAiSession(current.sessionId)
+
+          const conv = await window.electronAPI.loadConversation(pinnedConversationId)
+          if (conv) {
+            set({
+              messages: conv.messages,
+              conversationId: conv.id,
+              conversationTitle: conv.title,
+              conversationProvider: conv.provider,
+              sessionId: generateId(),
+              restoredFromHistory: true,
+              requiresReplaySeed: conv.provider === 'codex',
+              autoScreenshot: null,
+              pendingScreenshot: null,
+              viewHorizon: 0,
+              showingAll: true,
+              panelSizeMode: 'compact' as PanelSizeMode,
+              pendingInteractions: [],
+              showConversationList: false,
+              showNotesList: false
+            })
+          } else {
+            set({ pinnedConversationId: null, ...createFreshConversationState() })
+            await window.electronAPI.setSettings({ pinnedConversationId: null })
+          }
+        } else {
+          set({ viewHorizon: 0, showingAll: true })
+        }
+      } else if (current.messages.length > 0) {
+        await get().newSession()
       }
     }
 
@@ -248,24 +381,32 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
     // via releasePanelOpenTransition().
     set({
       visible: true,
-      showingAll: false,
+      showingAll: get().messages.length > 0 ? get().showingAll : false,
       panelSizeMode: 'compact' as PanelSizeMode,
       showConversationList: false,
-      showNotesList: false,
+      showNotesList: false
     })
   },
-  close: () => set((s) => ({
-    visible: false,
-    // Preserve viewHorizon during streaming so reopening shows the active exchange
-    viewHorizon: s.isStreaming ? s.viewHorizon : s.messages.length,
-    showingAll: s.isStreaming ? s.showingAll : false,
-    pendingScreenshot: null,
-    // Don't reset panelSizeMode here — changing it during the exit animation
-    // shifts the animate prop mid-exit, causing a visible size glitch.
-    // It resets to 'compact' on the next open().
-    showConversationList: false,
-    showNotesList: false,
-  })),
+  close: () => {
+    const state = get()
+    const isPinnedConversation = state.pinnedConversationId === state.conversationId
+    if (isPinnedConversation) {
+      saveConversationSnapshot(state)
+    }
+    set({
+      visible: false,
+      // Preserve viewHorizon during streaming so reopening shows the active exchange
+      viewHorizon:
+        isPinnedConversation || state.isStreaming ? state.viewHorizon : state.messages.length,
+      showingAll: isPinnedConversation || state.isStreaming ? state.showingAll : false,
+      pendingScreenshot: null,
+      // Don't reset panelSizeMode here — changing it during the exit animation
+      // shifts the animate prop mid-exit, causing a visible size glitch.
+      // It resets to 'compact' on the next open().
+      showConversationList: false,
+      showNotesList: false
+    })
+  },
 
   addUserMessage: (content) => {
     set((s) => {
@@ -291,7 +432,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
         packConfidence: s.autoScreenshot?.packConfidence,
         packContext: s.autoScreenshot?.packContext,
         packVariant: s.autoScreenshot?.packVariant,
-        createdAt: Date.now(),
+        createdAt: Date.now()
       }
       // Auto-name conversation from first user message
       const title = s.conversationTitle || content.slice(0, 60).replace(/\n/g, ' ').trim()
@@ -300,7 +441,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
         pendingScreenshot: null,
         conversationTitle: title,
         showConversationList: false,
-        showNotesList: false,
+        showNotesList: false
       }
     })
     debouncedSave()
@@ -313,12 +454,12 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
       id: messageId,
       role: 'assistant',
       content: '',
-      createdAt: Date.now(),
+      createdAt: Date.now()
     }
     set((s) => ({
       messages: [...s.messages, msg],
       isStreaming: true,
-      streamingMessageId: messageId,
+      streamingMessageId: messageId
     }))
   },
 
@@ -328,7 +469,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
         m.id === s.streamingMessageId ? { ...m, content: m.content + token } : m
       ),
       // First token means initialization is done
-      isInitializing: false,
+      isInitializing: false
     })),
 
   addToolUse: (toolName, toolInput) =>
@@ -337,7 +478,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
         m.id === s.streamingMessageId
           ? { ...m, toolUses: [...(m.toolUses || []), { name: toolName, input: toolInput }] }
           : m
-      ),
+      )
     })),
 
   finishStreaming: (fullText) => {
@@ -349,7 +490,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
       isInitializing: false,
       streamingMessageId: null,
       // Clear replay-seed flag after successful first resumed turn
-      requiresReplaySeed: false,
+      requiresReplaySeed: false
     }))
     debouncedSave()
   },
@@ -361,7 +502,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
       ),
       isStreaming: false,
       isInitializing: false,
-      streamingMessageId: null,
+      streamingMessageId: null
     }))
     debouncedSave()
   },
@@ -370,50 +511,29 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
   captureAndResolve: (s) => {
     // Clear stale screenType/ocrText so QuickActions doesn't flash old chips
     set({ autoScreenshot: { ...s, screenType: undefined, ocrText: undefined } })
-    if (s.ocrId) {
-      window.electronAPI.getOcrResult(s.ocrId).then((ocr) => {
-        if (!ocr) return
-        const current = useCompanionStore.getState().autoScreenshot
-        if (current && current.ocrId === s.ocrId) {
-          set({ autoScreenshot: { ...current, ocrText: ocr.ocrText, screenType: ocr.screenType } })
-        }
-      })
+    resolveScreenshotOcrInBackground('autoScreenshot', s)
+  },
+  setPendingScreenshot: (s) => {
+    set({
+      pendingScreenshot: s ? { ...s, screenType: undefined, ocrText: undefined } : null
+    })
+    if (s) {
+      resolveScreenshotOcrInBackground('pendingScreenshot', s)
     }
   },
-  setPendingScreenshot: (s) => set({ pendingScreenshot: s }),
   clearMessages: () => set({ messages: [], viewHorizon: 0, showingAll: false }),
 
-  newSession: () => {
+  newSession: async () => {
     const s = get()
-    // Save current conversation before clearing (if it has messages)
-    if (s.messages.length > 0) {
-      window.electronAPI.saveConversation({
-        id: s.conversationId,
-        title: s.conversationTitle,
-        provider: s.conversationProvider,
-        messages: s.messages,
-      })
+    const wasPinnedConversation = s.pinnedConversationId === s.conversationId
+    saveConversationSnapshot(s)
+    if (wasPinnedConversation) {
+      await window.electronAPI.setSettings({ pinnedConversationId: null })
     }
     window.electronAPI.cleanupAiSession(s.sessionId)
     set({
-      messages: [],
-      isStreaming: false,
-      isInitializing: false,
-      streamingMessageId: null,
-      sessionId: generateId(),
-      conversationId: generateId(),
-      conversationTitle: '',
-      restoredFromHistory: false,
-      requiresReplaySeed: false,
-      conversationProvider: '',
-      autoScreenshot: null,
-      pendingScreenshot: null,
-      viewHorizon: 0,
-      showingAll: false,
-      panelSizeMode: 'compact' as PanelSizeMode,
-      pendingInteractions: [],
-      showConversationList: false,
-      showNotesList: false,
+      ...createFreshConversationState(),
+      pinnedConversationId: wasPinnedConversation ? null : s.pinnedConversationId
     })
   },
 
@@ -453,13 +573,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
 
   saveCurrentConversation: () => {
     const s = get()
-    if (s.messages.length === 0) return
-    window.electronAPI.saveConversation({
-      id: s.conversationId,
-      title: s.conversationTitle,
-      provider: s.conversationProvider,
-      messages: s.messages,
-    })
+    saveConversationSnapshot(s)
   },
 
   loadConversation: async (id: string) => {
@@ -467,20 +581,23 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
     if (s.isStreaming) return
 
     // Save current conversation before switching
-    if (s.messages.length > 0) {
-      window.electronAPI.saveConversation({
-        id: s.conversationId,
-        title: s.conversationTitle,
-        provider: s.conversationProvider,
-        messages: s.messages,
-      })
+    saveConversationSnapshot(s)
+
+    const wasPinnedConversation = s.pinnedConversationId === s.conversationId
+    if (wasPinnedConversation && s.conversationId !== id) {
+      await window.electronAPI.setSettings({ pinnedConversationId: null })
     }
 
     // Clean up current provider session
     window.electronAPI.cleanupAiSession(s.sessionId)
 
     const conv = await window.electronAPI.loadConversation(id)
-    if (!conv) return
+    if (!conv) {
+      if (wasPinnedConversation && s.conversationId !== id) {
+        set({ pinnedConversationId: null })
+      }
+      return
+    }
 
     // Determine if we need replay-seed (for Codex app-server)
     const needsReplaySeed = conv.provider === 'codex'
@@ -501,6 +618,8 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
       pendingInteractions: [],
       showConversationList: false,
       showNotesList: false,
+      pinnedConversationId:
+        wasPinnedConversation && s.conversationId !== id ? null : s.pinnedConversationId
     })
   },
 
@@ -513,25 +632,40 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
   deleteConversation: async (id: string) => {
     const s = get()
     await window.electronAPI.deleteConversation(id)
+    if (s.pinnedConversationId === id) {
+      await window.electronAPI.setSettings({ pinnedConversationId: null })
+    }
     // If we deleted the currently loaded conversation, start fresh
     if (s.conversationId === id) {
       set({
-        messages: [],
-        conversationId: generateId(),
-        conversationTitle: '',
-        restoredFromHistory: false,
-        requiresReplaySeed: false,
-        conversationProvider: '',
-        viewHorizon: 0,
-        showingAll: false,
+        ...createFreshConversationState(),
+        pinnedConversationId: s.pinnedConversationId === id ? null : s.pinnedConversationId
       })
+    } else if (s.pinnedConversationId === id) {
+      set({ pinnedConversationId: null })
     }
   },
 
-  toggleConversationList: () => set((s) => ({ showConversationList: !s.showConversationList, showNotesList: false })),
-  toggleNotesList: () => set((s) => ({ showNotesList: !s.showNotesList, showConversationList: false })),
+  toggleConversationList: () =>
+    set((s) => ({ showConversationList: !s.showConversationList, showNotesList: false })),
+  toggleNotesList: () =>
+    set((s) => ({ showNotesList: !s.showNotesList, showConversationList: false })),
 
   setConversationProvider: (provider: string) => set({ conversationProvider: provider }),
+  toggleConversationPin: async () => {
+    const s = get()
+    if (s.messages.length === 0) return
+
+    const nextPinnedConversationId =
+      s.pinnedConversationId === s.conversationId ? null : s.conversationId
+
+    if (nextPinnedConversationId) {
+      saveConversationSnapshot(s)
+    }
+
+    set({ pinnedConversationId: nextPinnedConversationId })
+    await window.electronAPI.setSettings({ pinnedConversationId: nextPinnedConversationId })
+  },
 
   addInteractionRequest: (request) =>
     set((s) => {
@@ -544,7 +678,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
             m.id === s.streamingMessageId
               ? { ...m, interactions: [...(m.interactions || []), request] }
               : m
-          ),
+          )
         }
       }
 
@@ -560,7 +694,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
             index === lastAssistantIndex
               ? { ...message, interactions: [...(message.interactions || []), request] }
               : message
-          ),
+          )
         }
       }
 
@@ -569,26 +703,23 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
         role: 'assistant',
         content: '',
         interactions: [request],
-        createdAt: Date.now(),
+        createdAt: Date.now()
       }
 
       return {
         pendingInteractions,
-        messages: [...s.messages, syntheticMessage],
+        messages: [...s.messages, syntheticMessage]
       }
     }),
 
   resolveInteraction: (id, status) =>
     set((s) => {
-      const update = (req: AgentInteractionRequest) =>
-        req.id === id ? { ...req, status } : req
+      const update = (req: AgentInteractionRequest) => (req.id === id ? { ...req, status } : req)
       return {
         pendingInteractions: s.pendingInteractions.map(update),
         messages: s.messages.map((m) =>
-          m.interactions
-            ? { ...m, interactions: m.interactions.map(update) }
-            : m
-        ),
+          m.interactions ? { ...m, interactions: m.interactions.map(update) } : m
+        )
       }
-    }),
+    })
 }))

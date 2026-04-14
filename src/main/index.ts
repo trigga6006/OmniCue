@@ -1,4 +1,13 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, screen, ipcMain, globalShortcut } from 'electron'
+import {
+  app,
+  BrowserWindow,
+  Tray,
+  Menu,
+  nativeImage,
+  screen,
+  ipcMain,
+  globalShortcut
+} from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { fixPath } from './fixPath'
@@ -45,10 +54,10 @@ function createWindow(): void {
     const onScreen = screen.getAllDisplays().some((d) => {
       const b = d.bounds
       return (
-        settings.barPosX as number >= b.x &&
-        settings.barPosX as number <= b.x + b.width &&
-        settings.barPosY as number >= b.y &&
-        settings.barPosY as number <= b.y + b.height
+        (settings.barPosX as number) >= b.x &&
+        (settings.barPosX as number) <= b.x + b.width &&
+        (settings.barPosY as number) >= b.y &&
+        (settings.barPosY as number) <= b.y + b.height
       )
     })
     if (onScreen) {
@@ -203,11 +212,12 @@ function startCursorPolling(win: BrowserWindow): void {
     windowBounds: Electron.Rectangle,
     pad: number
   ): boolean =>
-    overlayState.interactiveRegions.some((region) =>
-      cursor.x >= windowBounds.x + region.x - pad &&
-      cursor.x <= windowBounds.x + region.x + region.width + pad &&
-      cursor.y >= windowBounds.y + region.y - pad &&
-      cursor.y <= windowBounds.y + region.y + region.height + pad
+    overlayState.interactiveRegions.some(
+      (region) =>
+        cursor.x >= windowBounds.x + region.x - pad &&
+        cursor.x <= windowBounds.x + region.x + region.width + pad &&
+        cursor.y >= windowBounds.y + region.y - pad &&
+        cursor.y <= windowBounds.y + region.y + region.height + pad
     )
 
   setInterval(() => {
@@ -232,12 +242,19 @@ function startCursorPolling(win: BrowserWindow): void {
 
     // Entry zone — slightly padded around the window
     const inEntryZone = isInRegions(cursor, bounds, ENTRY_PAD)
+    const inInteractiveRegion = isInRegions(cursor, bounds, 0)
 
     // Exit zone — wider margin so cursor must move further out before
     // we disable forwarding. This creates hysteresis at the boundary.
     const inExitZone = isInRegions(cursor, bounds, EXIT_PAD)
 
-    if (inEntryZone) {
+    if (inInteractiveRegion) {
+      if (overlayState.isIgnoring || overlayState.isForwarding) {
+        overlayState.isIgnoring = false
+        overlayState.isForwarding = false
+        win.setIgnoreMouseEvents(false)
+      }
+    } else if (inEntryZone) {
       // Cursor is in the window zone — ensure forwarding is active so the
       // renderer receives mouse events for hit-testing (clicks still pass through).
       if (overlayState.isIgnoring && !overlayState.isForwarding) {
@@ -284,7 +301,11 @@ if (!gotLock) {
 
 app.whenReady().then(() => {
   // Prune stale session memory on startup
-  try { pruneSessionMemory() } catch { /* best-effort */ }
+  try {
+    pruneSessionMemory()
+  } catch {
+    /* best-effort */
+  }
 
   registerIpcHandlers()
 
@@ -299,7 +320,7 @@ app.whenReady().then(() => {
         message: 'This is a test full-screen alert',
         title: 'Alarm',
         timeout: 30,
-        createdAt: Date.now(),
+        createdAt: Date.now()
       })
     }
   })
@@ -383,12 +404,15 @@ app.on('will-quit', () => {
     try {
       if (process.platform === 'win32') {
         require('child_process').spawn('taskkill', ['/T', '/F', '/PID', String(pid)], {
-          windowsHide: true, stdio: 'ignore',
+          windowsHide: true,
+          stdio: 'ignore'
         })
       } else {
         process.kill(pid)
       }
-    } catch { /* process already exited */ }
+    } catch {
+      /* process already exited */
+    }
   }
 })
 

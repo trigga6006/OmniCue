@@ -1444,6 +1444,8 @@ async function streamViaClaudeCodeCli(
   // Get or create a ControlPlane tab for this OmniCue session
   let tabId = sessionId ? claudeSessionToTab.get(sessionId) : undefined
   if (!tabId) {
+    // First message in this conversation — signal initializing state
+    callbacks.onInitializing?.()
     tabId = cp.createTab()
     if (sessionId) claudeSessionToTab.set(sessionId, tabId)
   }

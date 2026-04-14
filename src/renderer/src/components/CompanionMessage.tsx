@@ -4,7 +4,6 @@ import { Terminal, FileText, Search, Code, Globe, Copy, Check } from 'lucide-rea
 import type { ChatMessage, ToolUseEntry } from '@/lib/types'
 import { useCompanionStore } from '@/stores/companionStore'
 import oiLogoGlass from '@/assets/oi-logo-glass.svg'
-import codexLogo from '@/assets/codex-color.svg'
 import { MarkdownContent } from './MarkdownContent'
 import { InteractionCard } from './InteractionCard'
 
@@ -64,11 +63,7 @@ export const CompanionMessage = memo(function CompanionMessage({
   // Shows "Initializing" with the Codex logo during Codex session cold-start,
   // then transitions to the standard "Thinking" animation.
   if (!isUser && isThinking) {
-    const logo = isInitializing ? codexLogo : oiLogoGlass
     const label = isInitializing ? 'Initializing' : 'Thinking'
-    const glowColor = isInitializing
-      ? 'radial-gradient(circle, rgba(122,157,255,0.12) 0%, transparent 70%)'
-      : 'radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%)'
 
     return (
       <div className="flex justify-start mb-2">
@@ -76,13 +71,12 @@ export const CompanionMessage = memo(function CompanionMessage({
           <div className="relative w-6 h-6 flex items-center justify-center">
             <motion.div
               className="absolute inset-[-3px] rounded-full"
-              style={{ background: glowColor }}
+              style={{ background: 'radial-gradient(circle, rgba(255,255,255,0.08) 0%, transparent 70%)' }}
               animate={{ opacity: [0.4, 0.8, 0.4], scale: [0.9, 1.15, 0.9] }}
               transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
             />
             <motion.img
-              key={logo}
-              src={logo}
+              src={oiLogoGlass}
               alt=""
               className="w-5 h-5 relative"
               animate={{
@@ -97,18 +91,13 @@ export const CompanionMessage = memo(function CompanionMessage({
               }}
             />
           </div>
-          <AnimatePresence mode="wait">
-            <motion.span
-              key={label}
-              className="text-[12px] text-[var(--g-text-secondary)]"
-              initial={{ opacity: 0, y: 4 }}
-              animate={{ opacity: [0.5, 0.85, 0.5], y: 0 }}
-              exit={{ opacity: 0, y: -4 }}
-              transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
-            >
-              {label}
-            </motion.span>
-          </AnimatePresence>
+          <motion.span
+            className="text-[12px] text-[var(--g-text-secondary)]"
+            animate={{ opacity: [0.5, 0.85, 0.5] }}
+            transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
+          >
+            {label}
+          </motion.span>
         </div>
       </div>
     )

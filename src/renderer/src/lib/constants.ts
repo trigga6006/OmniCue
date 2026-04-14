@@ -3,7 +3,7 @@ export const GLASS = {
   dark: 'bg-white/12 text-white/90',
   light: 'bg-white/45 text-black/80',
   hover: 'hover:bg-white/20 hover:border-white/30',
-  hoverLight: 'hover:bg-white/55 hover:border-white/40',
+  hoverLight: 'hover:bg-white/55 hover:border-white/40'
 } as const
 
 export const DEFAULT_SETTINGS = {
@@ -43,6 +43,7 @@ export const DEFAULT_SETTINGS = {
   devRootPath: '',
   agentPermissions: 'read-only' as const,
   companionHotkey: 'Ctrl+Shift+Space',
+  pinnedConversationId: null as string | null
 }
 
 export const TIMER_CIRCLE_SIZE = 48
@@ -51,9 +52,9 @@ export const COMPANION_HEIGHT = 700
 
 export const PANEL_SIZES = {
   compact: { panelMaxH: 440, panelW: 420, windowH: 700, windowW: 1000 },
-  tall:    { panelMaxH: 640, panelW: 420, windowH: 900, windowW: 1000 },
-  wide:    { panelMaxH: 440, panelW: 580, windowH: 700, windowW: 1400 },
-  large:   { panelMaxH: 640, panelW: 580, windowH: 900, windowW: 1400 },
+  tall: { panelMaxH: 640, panelW: 420, windowH: 900, windowW: 1000 },
+  wide: { panelMaxH: 440, panelW: 580, windowH: 700, windowW: 1400 },
+  large: { panelMaxH: 640, panelW: 580, windowH: 900, windowW: 1400 }
 } as const
 
 export type PanelSizeMode = keyof typeof PANEL_SIZES

@@ -1,6 +1,15 @@
 import { memo, useEffect, useRef, useMemo, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import { MessageSquarePlus, X, ChevronUp, Maximize2, Minimize2, History, FileText } from 'lucide-react'
+import {
+  MessageSquarePlus,
+  X,
+  ChevronUp,
+  Maximize2,
+  Minimize2,
+  History,
+  FileText,
+  Pin
+} from 'lucide-react'
 import { glassCompanionStyle } from '@/lib/glass'
 import { useCompanionStore } from '@/stores/companionStore'
 import { CompanionMessage } from './CompanionMessage'
@@ -26,12 +35,15 @@ export const CompanionPanel = memo(function CompanionPanel({
   visible,
   onClose,
   anchorX: _anchorX,
-  anchorY,
+  anchorY
 }: CompanionPanelProps) {
   const messages = useCompanionStore((s) => s.messages)
   const isStreaming = useCompanionStore((s) => s.isStreaming)
   const streamingMessageId = useCompanionStore((s) => s.streamingMessageId)
   const pendingScreenshot = useCompanionStore((s) => s.pendingScreenshot)
+  const conversationId = useCompanionStore((s) => s.conversationId)
+  const pinnedConversationId = useCompanionStore((s) => s.pinnedConversationId)
+  const toggleConversationPin = useCompanionStore((s) => s.toggleConversationPin)
   const newSession = useCompanionStore((s) => s.newSession)
   const panelSizeMode = useCompanionStore((s) => s.panelSizeMode)
   const sizeConfig = PANEL_SIZES[panelSizeMode]
@@ -48,6 +60,7 @@ export const CompanionPanel = memo(function CompanionPanel({
     image: string
     title: string
   } | null>(null)
+  const isPinnedConversation = messages.length > 0 && pinnedConversationId === conversationId
 
   const hasEarlier = viewHorizon > 0 && messages.length > viewHorizon
   const visibleMessages = useMemo(() => {
@@ -97,7 +110,8 @@ export const CompanionPanel = memo(function CompanionPanel({
               width: sizeConfig.panelW,
               maxHeight: sizeConfig.panelMaxH + 140,
               willChange: 'transform, opacity',
-              transition: 'width 0.3s cubic-bezier(0.25, 0.1, 0.25, 1), max-height 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)',
+              transition:
+                'width 0.3s cubic-bezier(0.25, 0.1, 0.25, 1), max-height 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)'
             }}
             initial={{ y: -16, opacity: 0, scale: 0.96 }}
             animate={{ y: 0, opacity: 1, scale: 1 }}
@@ -120,9 +134,7 @@ export const CompanionPanel = memo(function CompanionPanel({
             <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--g-line)]">
               <div className="flex items-center gap-1.5">
                 <img src={oiLogo} alt="" className="w-4 h-4" />
-                <span className="text-[13px] font-medium text-[var(--g-text-bright)]">
-                  OmniCue
-                </span>
+                <span className="text-[13px] font-medium text-[var(--g-text-bright)]">OmniCue</span>
               </div>
               <ProviderBadge />
               <div className="flex items-center gap-1">
@@ -152,9 +164,10 @@ export const CompanionPanel = memo(function CompanionPanel({
                   onClick={toggleConversationList}
                   className={`w-6 h-6 flex items-center justify-center rounded-md
                     transition-colors cursor-pointer
-                    ${showConversationList
-                      ? 'text-[var(--g-text-bright)] bg-[var(--g-bg-active)]'
-                      : 'text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]'
+                    ${
+                      showConversationList
+                        ? 'text-[var(--g-text-bright)] bg-[var(--g-bg-active)]'
+                        : 'text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]'
                     }`}
                   title="Conversations"
                 >
@@ -164,13 +177,30 @@ export const CompanionPanel = memo(function CompanionPanel({
                   onClick={toggleNotesList}
                   className={`w-6 h-6 flex items-center justify-center rounded-md
                     transition-colors cursor-pointer
-                    ${showNotesList
-                      ? 'text-[var(--g-text-bright)] bg-[var(--g-bg-active)]'
-                      : 'text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]'
+                    ${
+                      showNotesList
+                        ? 'text-[var(--g-text-bright)] bg-[var(--g-bg-active)]'
+                        : 'text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)]'
                     }`}
                   title="Notes"
                 >
                   <FileText size={14} />
+                </button>
+                <button
+                  onClick={() => void toggleConversationPin()}
+                  disabled={messages.length === 0}
+                  className={`w-6 h-6 flex items-center justify-center rounded-md
+                    transition-colors
+                    ${
+                      messages.length === 0
+                        ? 'text-[var(--g-text-dim)] opacity-40 cursor-default'
+                        : isPinnedConversation
+                          ? 'text-white bg-[rgba(0,0,0,0.6)] ring-1 ring-[rgba(255,255,255,0.12)] cursor-pointer'
+                          : 'text-[var(--g-text-bright)] hover:text-[var(--g-text-bright)] hover:bg-[var(--g-bg-active)] cursor-pointer'
+                    }`}
+                  title={isPinnedConversation ? 'Unpin conversation' : 'Pin conversation'}
+                >
+                  <Pin size={14} fill={isPinnedConversation ? 'currentColor' : 'none'} />
                 </button>
                 <button
                   onClick={newSession}
@@ -199,7 +229,7 @@ export const CompanionPanel = memo(function CompanionPanel({
               className="flex-1 overflow-y-auto min-h-[120px]"
               style={{
                 maxHeight: sizeConfig.panelMaxH,
-                transition: 'max-height 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)',
+                transition: 'max-height 0.3s cubic-bezier(0.25, 0.1, 0.25, 1)'
               }}
             >
               {showNotesList ? (
@@ -247,7 +277,10 @@ export const CompanionPanel = memo(function CompanionPanel({
             )}
 
             {/* Quick actions — show above input when no messages */}
-            {visibleMessages.length === 0 && !hasEarlier && !showNotesList && !showConversationList && <QuickActions />}
+            {visibleMessages.length === 0 &&
+              !hasEarlier &&
+              !showNotesList &&
+              !showConversationList && <QuickActions />}
 
             {/* Input */}
             <div className="border-t border-[var(--g-line)]">

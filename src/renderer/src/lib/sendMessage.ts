@@ -14,7 +14,7 @@ const AI_PROVIDERS: AiProvider[] = [
   'mistral',
   'xai',
   'glm',
-  'kimi',
+  'kimi'
 ]
 
 function isAiProvider(value: string): value is AiProvider {
@@ -97,22 +97,6 @@ export async function sendCompanionMessage(text: string): Promise<void> {
 
   // ── Step 2: Resolve OCR (usually already complete) ──────────────────────
   const auto = store.autoScreenshot
-  if (auto?.ocrId && !auto.ocrText) {
-    const ocr = await window.electronAPI.getOcrResult(auto.ocrId).catch(() => null)
-    if (ocr) {
-      auto.ocrText = ocr.ocrText
-      auto.screenType = ocr.screenType
-    }
-  }
-
-  const manual = store.pendingScreenshot
-  if (manual?.ocrId && !manual.ocrText) {
-    const ocr = await window.electronAPI.getOcrResult(manual.ocrId).catch(() => null)
-    if (ocr) {
-      manual.ocrText = ocr.ocrText
-      manual.screenType = ocr.screenType
-    }
-  }
 
   // ── Step 3: Try intent resolution ──────────────────────────────────────
   // Thinking animation is already visible. If the intent handles it,
@@ -126,8 +110,8 @@ export async function sendCompanionMessage(text: string): Promise<void> {
   const updatedMessages = useCompanionStore.getState().messages
 
   // For the latest user message, patch in freshly-resolved OCR data
-  const lastUserIndex = updatedMessages.length - 1 -
-    [...updatedMessages].reverse().findIndex((m) => m.role === 'user')
+  const lastUserIndex =
+    updatedMessages.length - 1 - [...updatedMessages].reverse().findIndex((m) => m.role === 'user')
   const resolvedOcr = auto?.ocrText
   const resolvedScreenType = auto?.screenType
 
@@ -146,8 +130,8 @@ export async function sendCompanionMessage(text: string): Promise<void> {
         contentParts.push({ type: 'image_url', image_url: { url: m.manualScreenshot } })
       }
 
-      const ocrText = (isLatestUser && resolvedOcr) ? resolvedOcr : m.ocrText
-      const screenType = (isLatestUser && resolvedScreenType) ? resolvedScreenType : m.screenType
+      const ocrText = isLatestUser && resolvedOcr ? resolvedOcr : m.ocrText
+      const screenType = isLatestUser && resolvedScreenType ? resolvedScreenType : m.screenType
 
       let userText = m.content
       if (m.role === 'user' && (ocrText || m.activeApp)) {
@@ -162,7 +146,7 @@ export async function sendCompanionMessage(text: string): Promise<void> {
           content: contentParts,
           ocrText,
           screenshotTitle: m.screenshotTitle,
-          manualScreenshotTitle: m.manualScreenshotTitle,
+          manualScreenshotTitle: m.manualScreenshotTitle
         }
       }
 
@@ -171,7 +155,7 @@ export async function sendCompanionMessage(text: string): Promise<void> {
         content: m.content,
         ocrText,
         screenshotTitle: m.screenshotTitle,
-        manualScreenshotTitle: m.manualScreenshotTitle,
+        manualScreenshotTitle: m.manualScreenshotTitle
       }
     })
 
@@ -188,7 +172,8 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     currentStore.setConversationProvider(provider)
   }
 
-  const resumeMode = provider === 'codex' && currentStore.requiresReplaySeed ? 'replay-seed' : 'normal'
+  const resumeMode =
+    provider === 'codex' && currentStore.requiresReplaySeed ? 'replay-seed' : 'normal'
 
   try {
     await window.electronAPI.sendAiMessage({
@@ -196,11 +181,11 @@ export async function sendCompanionMessage(text: string): Promise<void> {
       sessionId: currentStore.sessionId,
       provider,
       resumeMode,
-      conversationId: currentStore.conversationId,
+      conversationId: currentStore.conversationId
     })
   } catch (err) {
-    useCompanionStore.getState().streamError(
-      `Failed to send message: ${err instanceof Error ? err.message : String(err)}`
-    )
+    useCompanionStore
+      .getState()
+      .streamError(`Failed to send message: ${err instanceof Error ? err.message : String(err)}`)
   }
 }

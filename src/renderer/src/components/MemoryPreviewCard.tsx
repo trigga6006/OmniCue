@@ -26,7 +26,7 @@ export const MemoryPreviewCard = memo(function MemoryPreviewCard({
   capsule,
   isCurrentConversation,
   onClear,
-  onPin,
+  onPin
 }: MemoryPreviewCardProps) {
   return (
     <div
@@ -64,7 +64,6 @@ export const MemoryPreviewCard = memo(function MemoryPreviewCard({
         </div>
       )}
 
-
       {/* Tags */}
       {capsule.tags.length > 0 && (
         <div className="flex flex-wrap gap-1 mb-2">
@@ -93,7 +92,10 @@ export const MemoryPreviewCard = memo(function MemoryPreviewCard({
       {/* Controls */}
       <div className="flex items-center gap-2 pt-1 border-t border-[rgba(255,255,255,0.06)]">
         <button
-          onClick={(e) => { e.stopPropagation(); onClear() }}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClear()
+          }}
           className="flex items-center gap-1 text-[10px] text-[var(--g-text-secondary)]
             hover:text-red-400 transition-colors cursor-pointer"
         >
@@ -102,12 +104,15 @@ export const MemoryPreviewCard = memo(function MemoryPreviewCard({
         </button>
         {isCurrentConversation && onPin && (
           <button
-            onClick={(e) => { e.stopPropagation(); onPin() }}
+            onClick={(e) => {
+              e.stopPropagation()
+              onPin()
+            }}
             className="flex items-center gap-1 text-[10px] text-[var(--g-text-secondary)]
               hover:text-blue-400 transition-colors cursor-pointer ml-auto"
           >
             <Pin size={10} />
-            Pin state
+            Save memory
           </button>
         )}
       </div>

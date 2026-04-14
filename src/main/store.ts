@@ -38,7 +38,19 @@ interface SettingsData {
   fullScreenAlarms: boolean
   fullScreenReminders: boolean
   fullScreenClaude: boolean
-  aiProvider: 'codex' | 'claude' | 'opencode' | 'kimicode' | 'openai' | 'gemini' | 'deepseek' | 'groq' | 'mistral' | 'xai' | 'glm' | 'kimi'
+  aiProvider:
+    | 'codex'
+    | 'claude'
+    | 'opencode'
+    | 'kimicode'
+    | 'openai'
+    | 'gemini'
+    | 'deepseek'
+    | 'groq'
+    | 'mistral'
+    | 'xai'
+    | 'glm'
+    | 'kimi'
   aiApiKey: string
   aiBaseUrl: string
   aiModel: string
@@ -65,6 +77,7 @@ interface SettingsData {
   agentPermissions: 'read-only' | 'workspace-write' | 'full-access'
   companionHotkey: string
   agentWorkspacePath: string
+  pinnedConversationId: string | null
 }
 
 const SETTINGS_DEFAULTS: SettingsData = {
@@ -105,6 +118,7 @@ const SETTINGS_DEFAULTS: SettingsData = {
   agentPermissions: 'read-only',
   companionHotkey: 'Ctrl+Shift+Space',
   agentWorkspacePath: '',
+  pinnedConversationId: null
 }
 
 export const settingsStore = {
@@ -114,7 +128,7 @@ export const settingsStore = {
   set(partial: Partial<SettingsData>): void {
     const current = this.get()
     writeJson('settings.json', { ...current, ...partial })
-  },
+  }
 }
 
 // ─── History ──────────────────────────────────────────────────────────────────
@@ -147,7 +161,7 @@ export const historyStore = {
   },
   clear(): void {
     writeJson('history.json', { entries: [] })
-  },
+  }
 }
 
 // ─── Alarms ───────────────────────────────────────────────────────────────────
@@ -155,10 +169,10 @@ export const historyStore = {
 export interface Alarm {
   id: string
   label: string
-  time: string        // "HH:MM" 24-hour
+  time: string // "HH:MM" 24-hour
   repeat: boolean
   enabled: boolean
-  lastFiredDate?: string  // "YYYY-MM-DD"
+  lastFiredDate?: string // "YYYY-MM-DD"
 }
 
 interface AlarmsData {
@@ -179,7 +193,7 @@ export const alarmsStore = {
   delete(id: string): void {
     const alarms = this.getAll().filter((a) => a.id !== id)
     writeJson('alarms.json', { alarms })
-  },
+  }
 }
 
 // ─── Reminders ────────────────────────────────────────────────────────────────
@@ -189,7 +203,7 @@ export interface Reminder {
   label: string
   intervalMinutes: number
   enabled: boolean
-  nextFireAt: number  // epoch ms
+  nextFireAt: number // epoch ms
 }
 
 interface RemindersData {
@@ -210,7 +224,7 @@ export const remindersStore = {
   delete(id: string): void {
     const reminders = this.getAll().filter((r) => r.id !== id)
     writeJson('reminders.json', { reminders })
-  },
+  }
 }
 
 // ─── Watchers ────────────────────────────────────────────────────────────────
@@ -221,10 +235,10 @@ export interface Watcher {
   id: string
   label: string
   type: WatcherType
-  target: string          // file path, folder path, or process name
+  target: string // file path, folder path, or process name
   status: 'active' | 'completed'
-  createdAt: number       // epoch ms
-  completedAt?: number    // epoch ms
+  createdAt: number // epoch ms
+  completedAt?: number // epoch ms
 }
 
 interface WatchersData {
@@ -253,7 +267,8 @@ export const watchersStore = {
     const completed = watchers.filter((w) => w.status === 'completed')
     if (completed.length > 50) {
       const toRemove = new Set(
-        completed.sort((a, b) => (a.completedAt || 0) - (b.completedAt || 0))
+        completed
+          .sort((a, b) => (a.completedAt || 0) - (b.completedAt || 0))
           .slice(0, completed.length - 50)
           .map((w) => w.id)
       )
@@ -265,5 +280,5 @@ export const watchersStore = {
   delete(id: string): void {
     const watchers = this.getAll().filter((w) => w.id !== id)
     writeJson('watchers.json', { watchers })
-  },
+  }
 }

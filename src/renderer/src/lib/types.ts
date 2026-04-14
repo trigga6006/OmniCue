@@ -1,4 +1,9 @@
-export type { ActionTier, ActionDefinition, ActionRequest, ActionResult } from '../../../shared/actions'
+export type {
+  ActionTier,
+  ActionDefinition,
+  ActionRequest,
+  ActionResult
+} from '../../../shared/actions'
 
 export interface Note {
   id: string
@@ -70,7 +75,19 @@ export interface HistoryEntry {
   provider?: string
 }
 
-export type AiProvider = 'codex' | 'claude' | 'opencode' | 'kimicode' | 'openai' | 'gemini' | 'deepseek' | 'groq' | 'mistral' | 'xai' | 'glm' | 'kimi'
+export type AiProvider =
+  | 'codex'
+  | 'claude'
+  | 'opencode'
+  | 'kimicode'
+  | 'openai'
+  | 'gemini'
+  | 'deepseek'
+  | 'groq'
+  | 'mistral'
+  | 'xai'
+  | 'glm'
+  | 'kimi'
 
 // ── Agent Interaction Types ──────────────────────────────────────────────────
 
@@ -273,6 +290,7 @@ export interface Settings {
   devRootPath: string
   agentPermissions: AgentPermissions
   companionHotkey: string
+  pinnedConversationId: string | null
 }
 
 export interface AppNotification {
@@ -331,28 +349,59 @@ export interface ElectronAPI {
   sampleScreenBrightness: () => Promise<number>
   setInteractiveLock: (locked: boolean) => void
   setPanelOpen: (open: boolean) => void
-  setInteractiveRegions: (regions: { x: number; y: number; width: number; height: number }[]) => void
+  setInteractiveRegions: (
+    regions: { x: number; y: number; width: number; height: number }[]
+  ) => void
   moveWindowBy: (dx: number, dy: number) => void
   requestWindowResize: (width: number, height: number) => Promise<void>
   setWindowBounds: (bounds: { x: number; y: number; width: number; height: number }) => void
   getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   getPrimaryDisplayBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   sendTestAlert: () => void
-  captureActiveWindow: (displayId?: number) => Promise<{ image: string; title: string; activeApp: string; processName: string; clipboardText: string; ocrId: number; packId?: string; packName?: string; packConfidence?: number; packContext?: Record<string, string>; packVariant?: string } | null>
-  getOcrResult: (ocrId: number) => Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>
+  captureActiveWindow: (
+    displayId?: number
+  ) => Promise<{
+    image: string
+    title: string
+    activeApp: string
+    processName: string
+    clipboardText: string
+    ocrId: number
+    packId?: string
+    packName?: string
+    packConfidence?: number
+    packContext?: Record<string, string>
+    packVariant?: string
+  } | null>
+  getOcrResult: (
+    ocrId: number
+  ) => Promise<{ ocrText: string; screenType: string; ocrDurationMs: number } | null>
   captureRegion: () => Promise<{ image: string; title: string; ocrId: number } | null>
-  sendAiMessage: (payload: { messages: unknown[]; sessionId: string; provider?: string; resumeMode?: 'normal' | 'replay-seed'; conversationId?: string }) => Promise<{ ok: boolean }>
+  sendAiMessage: (payload: {
+    messages: unknown[]
+    sessionId: string
+    provider?: string
+    resumeMode?: 'normal' | 'replay-seed'
+    conversationId?: string
+  }) => Promise<{ ok: boolean }>
   abortAiStream: (sessionId: string) => void
   cleanupAiSession: (sessionId: string) => void
   onAiInitializing: (cb: (data: { sessionId: string }) => void) => () => void
   onAiStreamToken: (cb: (data: { sessionId: string; token: string }) => void) => () => void
   onAiStreamDone: (cb: (data: { sessionId: string; fullText: string }) => void) => () => void
   onAiStreamError: (cb: (data: { sessionId: string; error: string }) => void) => () => void
-  onAiToolUse: (cb: (data: { sessionId: string; toolName: string; toolInput: string }) => void) => () => void
+  onAiToolUse: (
+    cb: (data: { sessionId: string; toolName: string; toolInput: string }) => void
+  ) => () => void
   onAiInteractionRequest: (cb: (data: AgentInteractionRequest) => void) => () => void
   respondToAiInteraction: (response: AgentInteractionResponse) => void
   onToggleCompanion: (cb: () => void) => () => void
-  getCodexStatus: () => Promise<{ authenticated: boolean; planType?: string; model?: string; authMode?: string }>
+  getCodexStatus: () => Promise<{
+    authenticated: boolean
+    planType?: string
+    model?: string
+    authMode?: string
+  }>
   getClaudeStatus: () => Promise<{ authenticated: boolean; planType?: string }>
   selectFolder: () => Promise<string | null>
   openExternalUrl: (url: string) => Promise<boolean>
@@ -360,15 +409,28 @@ export interface ElectronAPI {
   // ─── Session Memory ─────────────────────────────────────────────────────
   sessionMemoryQuery: (query: SessionMemoryQuery) => Promise<unknown>
   sessionMemoryList: () => Promise<SessionMemorySummary[]>
-  sessionMemoryCapture: (args: { conversationId: string; runtimeSessionId?: string; provider: string }) => Promise<{ ok: boolean }>
+  sessionMemoryCapture: (args: {
+    conversationId: string
+    runtimeSessionId?: string
+    provider: string
+  }) => Promise<{ ok: boolean }>
   sessionMemoryGetCapsule: (conversationId: string) => Promise<ResumeCapsule | null>
   sessionMemoryClear: (conversationId: string) => Promise<{ ok: boolean }>
-  desktopGetLiveContext: () => Promise<{ activeApp: string; processName: string; windowTitle: string }>
+  desktopGetLiveContext: () => Promise<{
+    activeApp: string
+    processName: string
+    windowTitle: string
+  }>
 
   // ─── Conversations ──────────────────────────────────────────────────────
   listConversations: () => Promise<ConversationSummary[]>
   loadConversation: (id: string) => Promise<StoredConversation | null>
-  saveConversation: (data: { id: string; title: string; provider: string; messages: ChatMessage[] }) => Promise<void>
+  saveConversation: (data: {
+    id: string
+    title: string
+    provider: string
+    messages: ChatMessage[]
+  }) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
   renameConversation: (id: string, title: string) => Promise<void>
 
@@ -384,7 +446,11 @@ export interface ElectronAPI {
   osRunSystemCommand: (command: string) => Promise<{ ok: boolean; error?: string }>
 
   // ─── Claude Code ControlPlane ────────────────────────────────────────────
-  claudeRespondPermission: (payload: { tabId: string; questionId: string; optionId: string }) => Promise<boolean>
+  claudeRespondPermission: (payload: {
+    tabId: string
+    questionId: string
+    optionId: string
+  }) => Promise<boolean>
   claudeGetHealth: () => Promise<unknown>
   claudeSetPermissionMode: (mode: string) => void
 
@@ -401,12 +467,19 @@ export interface ElectronAPI {
   deleteNote: (id: string) => Promise<{ ok: boolean; error?: string }>
 
   // ─── App Actions ────────────────────────────────────────────────────────
-  executeAction: (request: import('../../../shared/actions').ActionRequest) => Promise<import('../../../shared/actions').ActionResult>
+  executeAction: (
+    request: import('../../../shared/actions').ActionRequest
+  ) => Promise<import('../../../shared/actions').ActionResult>
   listActions: () => Promise<import('../../../shared/actions').ActionDefinition[]>
   resolveIntent: (payload: string | { utterance: string; conversationId?: string }) => Promise<{
     resolved: boolean
     executed?: boolean
-    plan: { actions: Array<{ actionId: string; params: Record<string, unknown> }>; explanation?: string; fallback?: string; question?: string }
+    plan: {
+      actions: Array<{ actionId: string; params: Record<string, unknown> }>
+      explanation?: string
+      fallback?: string
+      question?: string
+    }
     results?: unknown[]
   }>
   onActionExecuting: (cb: (data: { actionId: string; name: string }) => void) => () => void
