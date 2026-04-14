@@ -248,6 +248,20 @@ export function registerIpcHandlers(): void {
     return primary.bounds
   })
 
+  ipcMain.handle('get-current-display-bounds', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender)
+    if (!win) {
+      const primary = screen.getPrimaryDisplay()
+      return primary.bounds
+    }
+    const b = win.getBounds()
+    const display = screen.getDisplayNearestPoint({
+      x: b.x + Math.round(b.width / 2),
+      y: b.y + Math.round(b.height / 2),
+    })
+    return display.bounds
+  })
+
   ipcMain.handle('check-claude-integration', (): boolean => {
     try {
       const content = fs.readFileSync(claudeMdPath(), 'utf-8')

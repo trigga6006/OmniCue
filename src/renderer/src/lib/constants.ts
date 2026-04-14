@@ -57,7 +57,10 @@ export const PANEL_SIZES = {
   large: { panelMaxH: 640, panelW: 580, windowH: 900, windowW: 1400 }
 } as const
 
-export type PanelSizeMode = keyof typeof PANEL_SIZES
+export type PanelSizeMode = keyof typeof PANEL_SIZES | 'fullscreen'
+
+/** Gap (px) between monitor edges and the overlay in fullscreen mode */
+export const FULLSCREEN_GAP = 32
 
 // Morphing Pill dimensions
 export const PILL_H = 36

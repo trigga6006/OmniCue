@@ -5,6 +5,7 @@ const PANEL_SIZE_PRIORITY: Record<PanelSizeMode, number> = {
   tall: 1,
   wide: 2,
   large: 3,
+  fullscreen: 4,
 }
 
 export function preferLargerPanelSize(

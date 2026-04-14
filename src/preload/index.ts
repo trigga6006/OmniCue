@@ -85,6 +85,8 @@ const electronAPI = {
     ipcRenderer.invoke('get-window-bounds'),
   getPrimaryDisplayBounds: (): Promise<{ x: number; y: number; width: number; height: number }> =>
     ipcRenderer.invoke('get-primary-display-bounds'),
+  getCurrentDisplayBounds: (): Promise<{ x: number; y: number; width: number; height: number }> =>
+    ipcRenderer.invoke('get-current-display-bounds'),
   sendTestAlert: (): void => {
     ipcRenderer.send('send-test-alert')
   },

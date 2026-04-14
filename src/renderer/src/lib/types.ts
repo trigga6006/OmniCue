@@ -357,6 +357,7 @@ export interface ElectronAPI {
   setWindowBounds: (bounds: { x: number; y: number; width: number; height: number }) => void
   getWindowBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   getPrimaryDisplayBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
+  getCurrentDisplayBounds: () => Promise<{ x: number; y: number; width: number; height: number }>
   sendTestAlert: () => void
   captureActiveWindow: (
     displayId?: number
