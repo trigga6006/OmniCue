@@ -64,12 +64,18 @@ export class ClaudeControlPlane extends EventEmitter {
 
   constructor() {
     super()
+    const _perfCP = Date.now()
+    const _pCP = (label: string): void => console.error(`[PERF] ControlPlane constructor | ${label}: ${Date.now() - _perfCP}ms`)
+    _pCP('start')
     this.runManager = new ClaudeRunManager()
+    _pCP('RunManager created (findClaudeBinary + getCliPath)')
     this.permissionServer = new PermissionServer()
+    _pCP('PermissionServer created')
 
     // Start the permission hook server
     this.hookServerReady = this.permissionServer.start()
       .then((port) => {
+        _pCP(`Permission hook server ready on port ${port}`)
         debugLog(`ControlPlane: Permission hook server ready on port ${port}`)
       })
       .catch((err) => {
@@ -370,11 +376,15 @@ export class ClaudeControlPlane extends EventEmitter {
   }
 
   private async _dispatch(tabId: string, requestId: string, options: ClaudeRunOptions): Promise<void> {
+    const _perfD = Date.now()
+    const _pD = (label: string): void => console.error(`[PERF] _dispatch | ${label}: ${Date.now() - _perfD}ms`)
+    _pD('entered')
     const tab = this.tabs.get(tabId)
     if (!tab) throw new Error(`Tab ${tabId} disappeared`)
 
     // Wait for the permission hook server to be ready
     await this.hookServerReady
+    _pD('hookServerReady resolved')
 
     // Use stored session ID for resume if available and not overridden
     if (tab.claudeSessionId && !options.sessionId) {
@@ -389,6 +399,7 @@ export class ClaudeControlPlane extends EventEmitter {
       const hookSettingsPath = this.permissionServer.generateSettingsFile(runToken)
       options = { ...options, hookSettingsPath }
     }
+    _pD('hook settings generated')
 
     tab.activeRequestId = requestId
     if (!this.initRequestIds.has(requestId)) tab.promptCount++
@@ -400,6 +411,7 @@ export class ClaudeControlPlane extends EventEmitter {
     let pid: number | null = null
     try {
       const handle = this.runManager.startRun(requestId, options)
+      _pD(`process spawned | pid=${handle.pid}`)
       pid = handle.pid
       tab.runPid = pid
     } catch (err) {

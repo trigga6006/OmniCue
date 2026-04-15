@@ -89,27 +89,22 @@ export async function sendCompanionMessage(text: string): Promise<void> {
   const store = useCompanionStore.getState()
   if (store.isStreaming) return
 
+  const _perfSend = performance.now()
+  const _pS = (label: string): void => console.log(`[PERF] sendCompanionMessage | ${label}: ${Math.round(performance.now() - _perfSend)}ms`)
+
   // ── Step 1: Show user message + thinking animation immediately ─────────
   store.addUserMessage(text)
 
   const streamMsgId = generateId()
   store.startStreaming(streamMsgId)
+  _pS('UI updated (message + thinking)')
 
   // ── Step 2: Resolve OCR (usually already complete) ──────────────────────
   const auto = store.autoScreenshot
 
-  // ── Step 3: Try intent resolution ──────────────────────────────────────
-  // Thinking animation is already visible. If the intent handles it,
-  // finishStreaming is called on the existing message.
-  if (text.length < 200) {
-    const handled = await tryIntentResolution(text, store.conversationId)
-    if (handled) return
-  }
-
-  // ── Step 4: Build AI payload and send ──────────────────────────────────
+  // ── Step 3: Build AI payload (sync — do this before any awaits) ────────
   const updatedMessages = useCompanionStore.getState().messages
 
-  // For the latest user message, patch in freshly-resolved OCR data
   const lastUserIndex =
     updatedMessages.length - 1 - [...updatedMessages].reverse().findIndex((m) => m.role === 'user')
   const resolvedOcr = auto?.ocrText
@@ -119,7 +114,6 @@ export async function sendCompanionMessage(text: string): Promise<void> {
     .filter((m) => m.id !== streamMsgId) // exclude the empty streaming placeholder
     .map((m: ChatMessage) => {
       const contentParts: Array<{ type: string; text?: string; image_url?: { url: string } }> = []
-      // Find position in the original (unfiltered) array for OCR patching
       const isLatestUser = m.role === 'user' && updatedMessages.indexOf(m) === lastUserIndex
 
       if (m.role === 'user' && m.screenshot) {
@@ -159,8 +153,17 @@ export async function sendCompanionMessage(text: string): Promise<void> {
       }
     })
 
-  // Get provider from settings
+  // ── Step 4: Fire intent resolution and AI call in parallel ─────────────
+  // Intent resolution (desktop actions like "open folder") and the AI call
+  // are independent. Run both concurrently so intent doesn't block the AI
+  // path — saves 500-2000ms on every message.
+  const intentPromise = text.length < 200
+    ? tryIntentResolution(text, store.conversationId)
+    : Promise.resolve(false)
+
+  // Get provider from settings (needed before we can send)
   const settings = await window.electronAPI.getSettings()
+  _pS('getSettings() done')
   const configuredProvider: AiProvider = settings.aiProvider || 'codex'
 
   const currentStore = useCompanionStore.getState()
@@ -175,14 +178,30 @@ export async function sendCompanionMessage(text: string): Promise<void> {
   const resumeMode =
     provider === 'codex' && currentStore.requiresReplaySeed ? 'replay-seed' : 'normal'
 
+  // Start the AI call immediately — don't wait for intent resolution
+  _pS('firing AI call (parallel with intent)')
+  const aiPromise = window.electronAPI.sendAiMessage({
+    messages: coreMessages,
+    sessionId: currentStore.sessionId,
+    provider,
+    resumeMode,
+    conversationId: currentStore.conversationId
+  })
+
+  // Check if intent resolution handled it
+  const handled = await intentPromise
+  _pS(`intent resolution done | handled=${handled}`)
+
+  if (handled) {
+    // Intent handled it — abort the AI stream that was started in parallel
+    window.electronAPI.abortAiStream(currentStore.sessionId)
+    return
+  }
+
+  // Wait for the AI call to complete (it's already in flight)
   try {
-    await window.electronAPI.sendAiMessage({
-      messages: coreMessages,
-      sessionId: currentStore.sessionId,
-      provider,
-      resumeMode,
-      conversationId: currentStore.conversationId
-    })
+    await aiPromise
+    _pS('sendAiMessage returned')
   } catch (err) {
     useCompanionStore
       .getState()

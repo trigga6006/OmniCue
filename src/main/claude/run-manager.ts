@@ -163,6 +163,7 @@ export class ClaudeRunManager extends EventEmitter {
     // Determine if we need shell:true (only for .cmd shims on Windows)
     const useShell = needsShell(this.claudeBinary)
 
+    const _perfSpawn = Date.now()
     const child = spawn(this.claudeBinary, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       cwd,
@@ -170,6 +171,7 @@ export class ClaudeRunManager extends EventEmitter {
       windowsHide: true,
       shell: useShell,
     })
+    console.error(`[PERF] RunManager.startRun | spawn() returned: ${Date.now() - _perfSpawn}ms | pid=${child.pid}`)
 
     debugLog(`RunManager: Spawned PID: ${child.pid} (shell: ${useShell})`)
 
@@ -189,10 +191,16 @@ export class ClaudeRunManager extends EventEmitter {
     // ─── stdout -> NDJSON parser -> normalizer -> events ───
     const parser = StreamParser.fromStream(child.stdout!)
 
+    let _firstEventLogged = false
     parser.on('event', (raw: ClaudeEvent) => {
+      if (!_firstEventLogged) {
+        _firstEventLogged = true
+        console.error(`[PERF] RunManager.startRun | first stdout event: ${Date.now() - _perfSpawn}ms | type=${raw.type}`)
+      }
       // Track session ID from init event
       if (raw.type === 'system' && 'subtype' in raw && (raw as any).subtype === 'init') {
         handle.sessionId = (raw as any).session_id
+        console.error(`[PERF] RunManager.startRun | session_init: ${Date.now() - _perfSpawn}ms | sessionId=${handle.sessionId}`)
       }
 
       // Track permission_request events

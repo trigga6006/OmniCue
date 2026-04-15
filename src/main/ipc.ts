@@ -29,6 +29,9 @@ import type { SessionMemoryQuery } from './session-memory/types'
 
 const activeStreams = new Map<string, AbortController>()
 
+// Cache resolved CWD per session — avoids repeated filesystem walks
+const sessionCwdCache = new Map<string, string>()
+
 // Safe OS commands accessible to the agent — restricted allowlist
 function openSystemSettings(win32: string, darwin: string): void {
   if (process.platform === 'win32') exec(`start ${win32}`)
@@ -515,6 +518,9 @@ export function registerIpcHandlers(): void {
         conversationId?: string
       }
     ): Promise<{ ok: boolean }> => {
+      const _perfIpc = Date.now()
+      const _pI = (label: string): void => console.error(`[PERF] ai:send-message IPC | ${label}: ${Date.now() - _perfIpc}ms`)
+      _pI('handler entered')
       const win = BrowserWindow.fromWebContents(event.sender)
       if (!win) return { ok: false }
 
@@ -538,10 +544,16 @@ export function registerIpcHandlers(): void {
       activeStreams.set(payload.sessionId, controller)
 
       const settings = settingsStore.get()
-      const cwd = resolveProjectCwd(
-        payload.messages as ChatMessage[],
-        settings.devRootPath || ''
-      )
+      // Use cached CWD for this session if available — avoids repeated filesystem walks
+      let cwd = sessionCwdCache.get(payload.sessionId)
+      if (!cwd) {
+        cwd = resolveProjectCwd(
+          payload.messages as ChatMessage[],
+          settings.devRootPath || ''
+        )
+        sessionCwdCache.set(payload.sessionId, cwd)
+      }
+      _pI(`resolveProjectCwd done | cwd=${cwd} cached=${sessionCwdCache.has(payload.sessionId)}`)
 
       // Capture user-message event for session memory
       if (payload.conversationId && payload.provider) {
@@ -727,6 +739,7 @@ export function registerIpcHandlers(): void {
   ipcMain.on('ai:cleanup-session', (_event, payload: { sessionId: string }) => {
     cancelPendingRequestsForSession(payload.sessionId)
     activeStreams.delete(payload.sessionId)
+    sessionCwdCache.delete(payload.sessionId)
     cleanupSession(payload.sessionId)
   })
 
@@ -853,11 +866,15 @@ export function registerIpcHandlers(): void {
   // ─── Intent resolution ─────────────────────────────────────────────────────
 
   ipcMain.handle('intent:resolve', async (event, utteranceOrPayload: string | { utterance: string; conversationId?: string }) => {
+    const _perfIntent = Date.now()
+    const _pInt = (label: string): void => console.error(`[PERF] intent:resolve | ${label}: ${Date.now() - _perfIntent}ms`)
+    _pInt('handler entered')
     const win = BrowserWindow.fromWebContents(event.sender)
     const utterance = typeof utteranceOrPayload === 'string' ? utteranceOrPayload : utteranceOrPayload.utterance
     const convId = typeof utteranceOrPayload === 'object' ? utteranceOrPayload.conversationId : undefined
 
     const snapshot = await collectDesktopSnapshot(win, { includeClipboard: true, skipSystem: true })
+    _pInt('collectDesktopSnapshot done')
 
     // Load resume capsule if conversationId provided
     let capsule: import('./session-memory/types').ResumeCapsule | undefined
@@ -865,8 +882,10 @@ export function registerIpcHandlers(): void {
       const conv = loadConversation(convId)
       capsule = conv?.resumeCapsule ?? undefined
     }
+    _pInt('capsule loaded')
 
     const plan = await resolveIntent(utterance, snapshot, capsule)
+    _pInt(`resolveIntent done | resolved=${plan.fallback !== 'ask' && plan.actions.length > 0}`)
 
     if (plan.fallback === 'ask' || plan.actions.length === 0) {
       return { resolved: false, plan }

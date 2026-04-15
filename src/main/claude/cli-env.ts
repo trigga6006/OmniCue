@@ -24,6 +24,8 @@ let cachedBinary: string | null = null
 export function getCliPath(): string {
   if (cachedPath) return cachedPath
 
+  const _perfPath = Date.now()
+  console.error(`[PERF] getCliPath | start (cold)`)
   const entries: string[] = []
   const seen = new Set<string>()
 
@@ -43,13 +45,17 @@ export function getCliPath(): string {
 
   // On Windows, read fresh PATH from registry (catches post-login installs)
   if (process.platform === 'win32') {
+    const _psStart = Date.now()
     try {
       const result = execSync(
         'powershell.exe -NoProfile -Command "[Environment]::GetEnvironmentVariable(\'PATH\',\'Machine\') + \';\' + [Environment]::GetEnvironmentVariable(\'PATH\',\'User\')"',
         { encoding: 'utf-8', timeout: 5000, windowsHide: true }
       ).trim()
       addEntries(result, ';')
-    } catch { /* best effort */ }
+      console.error(`[PERF] getCliPath | PowerShell registry PATH: ${Date.now() - _psStart}ms`)
+    } catch {
+      console.error(`[PERF] getCliPath | PowerShell registry PATH failed: ${Date.now() - _psStart}ms`)
+    }
   }
 
   // Add well-known CLI directories
@@ -78,6 +84,7 @@ export function getCliPath(): string {
   }
 
   cachedPath = entries.join(delimiter)
+  console.error(`[PERF] getCliPath | total cold: ${Date.now() - _perfPath}ms`)
   return cachedPath
 }
 
@@ -98,6 +105,8 @@ export function getCliEnv(): NodeJS.ProcessEnv {
 export function findClaudeBinary(): string {
   if (cachedBinary) return cachedBinary
 
+  const _perfBin = Date.now()
+  console.error(`[PERF] findClaudeBinary | start (cold)`)
   const home = homedir()
 
   if (process.platform === 'win32') {
@@ -113,12 +122,14 @@ export function findClaudeBinary(): string {
     for (const c of candidates) {
       if (existsSync(c)) {
         debugLog(`Claude binary found: ${c}`)
+        console.error(`[PERF] findClaudeBinary | found at known path: ${Date.now() - _perfBin}ms | ${c}`)
         cachedBinary = c
         return c
       }
     }
 
     // Fall back to `where` on the augmented PATH
+    const _whereStart = Date.now()
     try {
       const result = execSync('where claude', {
         encoding: 'utf-8',
@@ -128,11 +139,14 @@ export function findClaudeBinary(): string {
       }).trim()
       const firstLine = result.split(/\r?\n/)[0]?.trim()
       if (firstLine) {
+        console.error(`[PERF] findClaudeBinary | 'where' fallback: ${Date.now() - _whereStart}ms | ${firstLine}`)
         debugLog(`Claude binary via where: ${firstLine}`)
         cachedBinary = firstLine
         return firstLine
       }
-    } catch { /* not found */ }
+    } catch {
+      console.error(`[PERF] findClaudeBinary | 'where' fallback failed: ${Date.now() - _whereStart}ms`)
+    }
   } else {
     // macOS/Linux
     const candidates = [
