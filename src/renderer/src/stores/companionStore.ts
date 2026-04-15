@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { ChatMessage, AgentInteractionRequest } from '@/lib/types'
 import { generateId } from '@/lib/utils'
-import { PANEL_SIZES, type PanelSizeMode } from '@/lib/constants'
+import { PANEL_SIZES, FULLSCREEN_GAP, type PanelSizeMode } from '@/lib/constants'
 import { suppressRegionPublish } from '@/hooks/useClickThrough'
 
 // ── Transition coordination ────────────────────────────────────────────────
@@ -140,6 +140,8 @@ interface CompanionState {
   panelSizeMode: PanelSizeMode
   /** Pending agent interaction requests */
   pendingInteractions: AgentInteractionRequest[]
+  /** Saved window bounds before entering fullscreen, used to restore on exit */
+  preFullscreenBounds: { x: number; y: number; width: number; height: number } | null
 
   // ── Conversation history state ────────────────────────────────────────────
   conversationId: string
@@ -262,6 +264,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
   aiMode: 'auto',
   panelSizeMode: 'compact' as PanelSizeMode,
   pendingInteractions: [],
+  preFullscreenBounds: null,
 
   // Conversation history state
   conversationId: generateId(),
@@ -284,6 +287,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
           viewHorizon: isPinnedConversation || s.isStreaming ? s.viewHorizon : s.messages.length,
           showingAll: isPinnedConversation || s.isStreaming ? s.showingAll : false,
           pendingScreenshot: null,
+          preFullscreenBounds: null,
           showConversationList: false,
           showNotesList: false
         }
@@ -400,6 +404,7 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
         isPinnedConversation || state.isStreaming ? state.viewHorizon : state.messages.length,
       showingAll: isPinnedConversation || state.isStreaming ? state.showingAll : false,
       pendingScreenshot: null,
+      preFullscreenBounds: null,
       // Don't reset panelSizeMode here — changing it during the exit animation
       // shifts the animate prop mid-exit, causing a visible size glitch.
       // It resets to 'compact' on the next open().
@@ -547,8 +552,39 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
     const release = suppressRegionPublish()
     replacePendingRelease('size', release)
 
-    const config = PANEL_SIZES[mode]
-    await window.electronAPI.requestWindowResize(config.windowW, config.windowH)
+    const isFullscreenTransition = mode === 'fullscreen' || state.panelSizeMode === 'fullscreen'
+
+    if (mode === 'fullscreen') {
+      // Save current window bounds so we can restore on exit
+      const currentBounds = await window.electronAPI.getWindowBounds()
+      // Get the display the overlay is currently on
+      const displayBounds = await window.electronAPI.getCurrentDisplayBounds()
+      // Expand window to near-fullscreen with a gap for the floating effect
+      window.electronAPI.setWindowBounds({
+        x: displayBounds.x + FULLSCREEN_GAP,
+        y: displayBounds.y + FULLSCREEN_GAP,
+        width: displayBounds.width - FULLSCREEN_GAP * 2,
+        height: displayBounds.height - FULLSCREEN_GAP * 2,
+      })
+      set({ preFullscreenBounds: currentBounds })
+    } else if (state.panelSizeMode === 'fullscreen' && state.preFullscreenBounds) {
+      // Exiting fullscreen — restore position and apply target size in one step
+      const prev = state.preFullscreenBounds
+      const config = PANEL_SIZES[mode as keyof typeof PANEL_SIZES]
+      const centerX = prev.x + Math.round(prev.width / 2)
+      window.electronAPI.setWindowBounds({
+        x: centerX - Math.round(config.windowW / 2),
+        y: prev.y,
+        width: config.windowW,
+        height: config.windowH,
+      })
+      set({ preFullscreenBounds: null })
+    } else {
+      // Standard panel resize between compact/tall/wide/large
+      const config = PANEL_SIZES[mode as keyof typeof PANEL_SIZES]
+      await window.electronAPI.requestWindowResize(config.windowW, config.windowH)
+    }
+
     await nextFrame()
 
     if (!isCurrentTransition(token)) {
@@ -560,9 +596,15 @@ export const useCompanionStore = create<CompanionState>((set, get) => ({
     }
 
     // State change triggers CSS transition on width/maxHeight.
-    // Suppression is released by CompanionPanel's transitionend handler
-    // via releasePanelSizeTransition().
+    // For standard transitions, suppression is released by CompanionPanel's
+    // transitionend handler via releasePanelSizeTransition().
     set({ panelSizeMode: mode })
+
+    // For fullscreen transitions, CSS can't interpolate between px and
+    // percentage values, so transitionend won't fire. Release manually.
+    if (isFullscreenTransition) {
+      releasePanelSizeTransition()
+    }
   },
   setAiMode: (mode) => {
     set({ aiMode: mode })

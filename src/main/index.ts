@@ -16,7 +16,7 @@ import { startServer } from './server'
 import { startScheduler } from './scheduler'
 import { overlayState } from './overlayState'
 import { settingsStore } from './store'
-import { cleanupAllTempImages, activeChildPids, shutdownClaudeControlPlane } from './ai'
+import { cleanupAllTempImages, activeChildPids, shutdownClaudeControlPlane, warmupClaudeControlPlane } from './ai'
 import { cacheActiveWindow, cleanupActiveWindowScript, getActiveWindowAsync } from './activeWindow'
 import { cleanupActionScripts } from './actions'
 import { recordFocus } from './context/focus-history'
@@ -378,6 +378,12 @@ app.whenReady().then(() => {
     startServer(mainWindow)
     startCursorPolling(mainWindow)
   }
+
+  // Eagerly warm up the Claude ControlPlane in the background.
+  // This moves expensive cold-start work (PowerShell PATH lookup, binary resolution,
+  // permission server, CLI process spawn) to app launch so the first user message
+  // hits a pre-warmed session instead of waiting 5-10 seconds.
+  setTimeout(() => warmupClaudeControlPlane(), 500)
 
   setInterval(() => {
     void getActiveWindowAsync().then((info) => recordFocus(info))

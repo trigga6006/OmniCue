@@ -25,6 +25,8 @@ import type { NormalizedClaudeEvent } from '../shared/claude-types'
 let _claudeControlPlane: ClaudeControlPlane | null = null
 // Map OmniCue sessionIds -> ControlPlane tabIds
 const claudeSessionToTab = new Map<string, string>()
+// Pre-warmed tab ready for the first conversation (set by warmupClaudeControlPlane)
+let _warmTabId: string | null = null
 
 export function getClaudeControlPlane(): ClaudeControlPlane {
   if (!_claudeControlPlane) {
@@ -33,11 +35,32 @@ export function getClaudeControlPlane(): ClaudeControlPlane {
   return _claudeControlPlane
 }
 
+/**
+ * Eagerly initialize the ControlPlane and warm up a Claude session.
+ * Call at app startup so the first user message skips cold-start costs:
+ *   - getCliPath() PowerShell registry lookup (~1-3s)
+ *   - findClaudeBinary() filesystem/where lookup (~0.5-2s)
+ *   - PermissionServer HTTP server start (~50ms)
+ *   - Claude CLI process spawn + session creation (~2-5s)
+ */
+export function warmupClaudeControlPlane(): void {
+  try {
+    const cp = getClaudeControlPlane()
+    _warmTabId = cp.createTab()
+    cp.initSession(_warmTabId)
+    debugLog('ControlPlane warmup started')
+  } catch (err) {
+    debugLog(`ControlPlane warmup failed: ${(err as Error).message}`)
+    _warmTabId = null
+  }
+}
+
 export function shutdownClaudeControlPlane(): void {
   if (_claudeControlPlane) {
     _claudeControlPlane.shutdown()
     _claudeControlPlane = null
     claudeSessionToTab.clear()
+    _warmTabId = null
   }
 }
 
@@ -1430,26 +1453,40 @@ async function streamViaClaudeCodeCli(
   _permissions: AgentPermissions = 'read-only',
   sessionId?: string
 ): Promise<void> {
-  console.error(`[DIAG] streamViaClaudeCodeCli ENTERED | cwd=${cwd} sessionId=${sessionId}`)
+  const _perfStart = Date.now()
+  const _perf = (label: string): void => console.error(`[PERF] ${label}: ${Date.now() - _perfStart}ms (T+${Date.now() - _perfStart}ms)`)
+  _perf('streamViaClaudeCodeCli ENTERED')
   // For Claude Code CLI: send only the latest user message as the prompt.
   // System instructions and desktop tools go via --append-system-prompt so
   // they become part of Claude Code's actual system context.
   const lastUserMessage = [...messages].reverse().find(m => m.role === 'user')
   const prompt = lastUserMessage ? getTextContent(lastUserMessage.content) || '' : ''
-  console.error(`[DIAG] prompt built | length=${prompt.length}`)
+  _perf('prompt extracted')
   const resolvedCwd = cwd || homedir()
   const cp = getClaudeControlPlane()
-  console.error(`[DIAG] ControlPlane obtained`)
+  _perf('ControlPlane obtained (includes findClaudeBinary + getCliPath)')
 
-  // Get or create a ControlPlane tab for this OmniCue session
+  // Get or create a ControlPlane tab for this OmniCue session.
+  // If a warm tab from startup is available, adopt it instead of creating cold.
   let tabId = sessionId ? claudeSessionToTab.get(sessionId) : undefined
   if (!tabId) {
-    // First message in this conversation — signal initializing state
-    callbacks.onInitializing?.()
-    tabId = cp.createTab()
+    if (_warmTabId && cp.getTabStatus(_warmTabId)) {
+      // Adopt the pre-warmed tab — the ControlPlane, PermissionServer,
+      // getCliPath, and findClaudeBinary caches are all warm.
+      // Reset the session ID so the first real message starts a fresh session
+      // (the warmup session's --resume would replay its result and close stdin).
+      tabId = _warmTabId
+      _warmTabId = null
+      cp.resetTabSession(tabId)
+      _perf('adopted warm tab (skipped cold init)')
+    } else {
+      // No warm tab available — cold start
+      callbacks.onInitializing?.()
+      tabId = cp.createTab()
+      _perf('created new tab (cold)')
+    }
     if (sessionId) claudeSessionToTab.set(sessionId, tabId)
   }
-  console.error(`[DIAG] tabId=${tabId}`)
 
   const requestId = randomUUID()
   let fullText = ''
@@ -1458,12 +1495,16 @@ async function streamViaClaudeCodeCli(
   let settled = false
 
   // Listen for events on this tab
+  let _firstTokenLogged = false
   const onEvent = (_tabId: string, event: NormalizedClaudeEvent): void => {
     if (_tabId !== tabId) return
-    console.error(`[DIAG] onEvent: type=${event.type} tabId=${_tabId}`)
 
     switch (event.type) {
       case 'text_chunk':
+        if (!_firstTokenLogged) {
+          _firstTokenLogged = true
+          _perf('FIRST TOKEN received from CLI')
+        }
         fullText += event.text
         callbacks.onToken(event.text)
         break
@@ -1562,12 +1603,14 @@ async function streamViaClaudeCodeCli(
   abortSignal?.addEventListener('abort', handleAbort, { once: true })
 
   try {
+    _perf('about to submitPrompt')
     await cp.submitPrompt(tabId, requestId, {
       prompt,
       projectPath: resolvedCwd,
       permissionMode: settingsStore.get().agentPermissions || 'read-only',
       appendSystemPrompt: `${SYSTEM_PROMPT}\n\n${NON_INTERACTIVE_SESSION_INSTRUCTIONS}\n\n${DESKTOP_TOOLS_PROMPT}`,
     })
+    _perf('submitPrompt resolved (run complete)')
   } catch (err) {
     // If the run failed and we haven't notified the UI yet, do it now
     if (!settled) {
@@ -1953,9 +1996,11 @@ export async function streamAiResponse(
   resumeMode: 'normal' | 'replay-seed' = 'normal',
   conversationId?: string
 ): Promise<void> {
+  const _perfStreamStart = Date.now()
+  const _perfS = (label: string): void => console.error(`[PERF] streamAiResponse | ${label}: ${Date.now() - _perfStreamStart}ms`)
   const settings = settingsStore.get()
   const resolvedProvider = provider || settings.aiProvider || 'codex'
-  console.error(`[DIAG] streamAiResponse called | provider=${resolvedProvider} cwd=${cwd} sessionId=${sessionId}`)
+  _perfS(`entered | provider=${resolvedProvider}`)
   debugLog(`Provider: ${resolvedProvider}, Permissions: ${permissions}, CWD: ${cwd}`)
 
   // ── Resume graft injection ──────────────────────────────────────────────

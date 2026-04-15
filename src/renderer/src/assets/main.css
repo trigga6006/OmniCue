@@ -1,6 +1,50 @@
 @import "tailwindcss";
 
+/* ── OpenAI Sans + LF Serif ────────────────────────────────────────────── */
+
+@font-face {
+  font-family: "OpenAI Sans";
+  src: url("https://cdn.openai.com/common/fonts/openai-sans/v2/OpenAISans-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "OpenAI Sans";
+  src: url("https://cdn.openai.com/common/fonts/openai-sans/v2/OpenAISans-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "OpenAI Sans";
+  src: url("https://cdn.openai.com/common/fonts/openai-sans/v2/OpenAISans-Semibold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "OpenAI Sans";
+  src: url("https://cdn.openai.com/common/fonts/openai-sans/v2/OpenAISans-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "LF Serif";
+  src: url("https://cdn.openai.com/common/fonts/lf-serif/lf-serif-s-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @theme {
+  --font-sans: "OpenAI Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-serif: "LF Serif", Georgia, serif;
   --color-glass-light: rgba(255, 255, 255, 0.45);
   --color-glass-dark: rgba(255, 255, 255, 0.12);
 }
@@ -134,7 +178,7 @@ html, body, #root {
   height: 100%;
   background: transparent !important;
   overflow: hidden;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', system-ui, sans-serif;
+  font-family: "OpenAI Sans", "Segoe UI", Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
