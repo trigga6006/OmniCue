@@ -1547,20 +1547,34 @@ async function streamViaClaudeCodeCli(
         break
 
       case 'permission_request':
-        // Forward permission requests to the renderer via the interaction callback
         if (callbacks.onInteractionRequest) {
-          callbacks.onInteractionRequest({
-            id: event.questionId,
+          const interaction: import('./agent-interactions').AgentInteractionRequest = {
+            id: randomUUID(),
+            providerRequestId: event.questionId,
+            provider: 'claude',
             sessionId: sessionId || '',
-            kind: 'command-approval' as any,
+            kind: 'command-approval',
             title: `${event.toolName} requires permission`,
-            description: event.toolDescription,
-            options: event.options?.map(o => ({
+            description:
+              event.toolDescription ||
+              (event.toolInput ? JSON.stringify(event.toolInput).slice(0, 300) : undefined),
+            options: event.options?.map((o) => ({
               id: o.id,
               label: o.label,
-              description: '',
+              value: o.id,
+              style: o.kind === 'deny' ? 'danger' : o.id === 'allow' ? 'primary' : 'secondary',
             })),
-          } as any)
+            requestedAt: Date.now(),
+            status: 'pending',
+            rawMethod: 'permission_request',
+          }
+
+          registerPendingRequest(interaction, (result) => {
+            const decision = (result as { decision?: string } | undefined)?.decision
+            cp.respondToPermission(tabId!, event.questionId, decision || 'deny')
+          })
+
+          callbacks.onInteractionRequest(interaction)
         }
         break
 
