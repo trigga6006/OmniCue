@@ -94,7 +94,12 @@ export const InteractionCard = memo(function InteractionCard({ interaction }: In
       selectedOptionId: optionValue,
     }
     window.electronAPI.respondToAiInteraction(response)
-    resolveInteraction(interaction.id, optionValue === 'decline' || optionValue === 'cancel' ? 'declined' : 'resolved')
+    resolveInteraction(
+      interaction.id,
+      optionValue === 'decline' || optionValue === 'deny' || optionValue === 'cancel'
+        ? 'declined'
+        : 'resolved'
+    )
   }, [interaction, resolveInteraction])
 
   const handleSubmitAnswers = useCallback(() => {
