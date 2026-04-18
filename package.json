@@ -1,6 +1,6 @@
 {
   "name": "omnicue",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "AI-powered desktop overlay companion for Windows",
   "main": "./out/main/index.js",
   "bin": {

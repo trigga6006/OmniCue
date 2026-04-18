@@ -1,6 +1,9 @@
 import { spawn, ChildProcess } from 'child_process'
 import { EventEmitter } from 'events'
-import { homedir } from 'os'
+import { mkdirSync, unlinkSync, writeFileSync } from 'fs'
+import { homedir, tmpdir } from 'os'
+import { join } from 'path'
+import { randomUUID } from 'crypto'
 import { StreamParser } from './stream-parser'
 import { normalize } from './event-normalizer'
 import { findClaudeBinary, getCliEnv, needsShell } from './cli-env'
@@ -50,6 +53,7 @@ export interface RunHandle {
   toolCallCount: number
   sawPermissionRequest: boolean
   permissionDenials: Array<{ tool_name: string; tool_use_id: string }>
+  tempFiles: string[]
 }
 
 /**
@@ -87,6 +91,21 @@ export class ClaudeRunManager extends EventEmitter {
       env.PATH = `${binDir}${pathSep}${env.PATH}`
     }
     return env
+  }
+
+  private _writeTempPromptFile(kind: 'system' | 'append', content: string): string {
+    const dir = join(tmpdir(), 'omnicue-claude-prompts')
+    try { mkdirSync(dir, { recursive: true }) } catch { /* exists */ }
+
+    const filePath = join(dir, `omnicue-${kind}-${randomUUID()}.txt`)
+    writeFileSync(filePath, content, 'utf-8')
+    return filePath
+  }
+
+  private _cleanupTempFiles(paths: string[]): void {
+    for (const filePath of paths) {
+      try { unlinkSync(filePath) } catch { /* best effort */ }
+    }
   }
 
   startRun(requestId: string, options: ClaudeRunOptions): RunHandle {
@@ -146,8 +165,11 @@ export class ClaudeRunManager extends EventEmitter {
     if (options.maxBudgetUsd) {
       args.push('--max-budget-usd', String(options.maxBudgetUsd))
     }
+    const tempFiles: string[] = []
     if (options.systemPrompt) {
-      args.push('--system-prompt', options.systemPrompt)
+      const systemPromptFile = this._writeTempPromptFile('system', options.systemPrompt)
+      tempFiles.push(systemPromptFile)
+      args.push('--system-prompt-file', systemPromptFile)
     }
 
     // Always tell Claude it's inside OmniCue, plus any caller-provided system context
@@ -155,7 +177,9 @@ export class ClaudeRunManager extends EventEmitter {
     if (options.appendSystemPrompt) {
       systemParts.push(options.appendSystemPrompt)
     }
-    args.push('--append-system-prompt', systemParts.join('\n\n'))
+    const appendSystemPromptFile = this._writeTempPromptFile('append', systemParts.join('\n\n'))
+    tempFiles.push(appendSystemPromptFile)
+    args.push('--append-system-prompt-file', appendSystemPromptFile)
 
     debugLog(`RunManager: Starting run ${requestId}: ${this.claudeBinary} (cwd: ${cwd})`)
     debugLog(`RunManager: Args: ${args.map((a, i) => `[${i}]=${a.substring(0, 80)}`).join(' ')}`)
@@ -186,6 +210,7 @@ export class ClaudeRunManager extends EventEmitter {
       toolCallCount: 0,
       sawPermissionRequest: false,
       permissionDenials: [],
+      tempFiles,
     }
 
     // ─── stdout -> NDJSON parser -> normalizer -> events ───
@@ -262,6 +287,7 @@ export class ClaudeRunManager extends EventEmitter {
       if (code !== 0 && stderrSummary) {
         debugLog(`RunManager: Stderr on exit [${requestId}]: ${stderrSummary.substring(0, 500)}`)
       }
+      this._cleanupTempFiles(handle.tempFiles)
       this._finishedRuns.set(requestId, handle)
       this.activeRuns.delete(requestId)
       this.emit('exit', requestId, code, signal, handle.sessionId)
@@ -270,6 +296,7 @@ export class ClaudeRunManager extends EventEmitter {
 
     child.on('error', (err) => {
       debugLog(`RunManager: Process error [${requestId}]: ${err.message}`)
+      this._cleanupTempFiles(handle.tempFiles)
       this._finishedRuns.set(requestId, handle)
       this.activeRuns.delete(requestId)
       this.emit('error', requestId, err)
